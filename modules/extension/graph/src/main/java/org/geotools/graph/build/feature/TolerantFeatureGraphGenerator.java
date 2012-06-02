@@ -1,3 +1,19 @@
+/*
+ *    GeoTools - The Open Source Java GIS Toolkit
+ *    http://geotools.org
+ *
+ *    (C) 2012, Open Source Geospatial Foundation (OSGeo)
+ *
+ *    This library is free software; you can redistribute it and/or
+ *    modify it under the terms of the GNU Lesser General Public
+ *    License as published by the Free Software Foundation;
+ *    version 2.1 of the License.
+ *
+ *    This library is distributed in the hope that it will be useful,
+ *    but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ *    Lesser General Public License for more details.
+ */
 package org.geotools.graph.build.feature;
 
 import com.vividsolutions.jts.geom.Geometry;
@@ -10,8 +26,13 @@ import org.geotools.graph.structure.Graphable;
 import org.opengis.feature.simple.SimpleFeature;
 
 /**
- * User: b543674
- * Date: 5/31/12
+ * Generates a graph where coordinates near each other are snapped to the same node.
+ *
+ * This can be used in combination with TolerantLineStringGraphGenerator.
+ * Since TolerantLineStringGraphGenerator may change the linestring, this class
+ * preserves that change, by altering the Feature´s geometry.
+ *
+ * @author Anders Bakkevold
  */
 public class TolerantFeatureGraphGenerator extends BasicGraphGenerator {
 
@@ -32,22 +53,22 @@ public class TolerantFeatureGraphGenerator extends BasicGraphGenerator {
         return decorated.getGraphBuilder();
     }
 
-    public Graphable add( Object obj ) {
+    public Graphable add(Object obj) {
         SimpleFeature feature = (SimpleFeature) obj;
-        Graphable g = decorated.add( feature.getDefaultGeometry() );
-        //the graphgenerator may have altered the geom when snapping.
-        Geometry geom = (Geometry)g.getObject();
+        Graphable g = decorated.add(feature.getDefaultGeometry());
+        // the graphgenerator may have altered the geom when snapping.
+        Geometry geom = (Geometry) g.getObject();
         feature.setDefaultGeometry(geom);
         return g;
     }
 
-    public Graphable remove( Object obj ) {
+    public Graphable remove(Object obj) {
         SimpleFeature feature = (SimpleFeature) obj;
-        return decorated.remove( feature.getDefaultGeometry() );
+        return decorated.remove(feature.getDefaultGeometry());
     }
 
     public Graphable get(Object obj) {
         SimpleFeature feature = (SimpleFeature) obj;
-        return decorated.get( feature.getDefaultGeometry() );
+        return decorated.get(feature.getDefaultGeometry());
     }
 }
