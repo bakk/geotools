@@ -40,7 +40,7 @@ import org.geotools.data.complex.config.NonFeatureTypeProxy;
 import org.geotools.data.complex.filter.UnmappingFilterVisitor;
 import org.geotools.data.complex.filter.UnmappingFilterVistorFactory;
 import org.geotools.data.complex.filter.XPath;
-import org.geotools.data.complex.filter.XPath.StepList;
+import org.geotools.data.complex.filter.XPathUtil.StepList;
 import org.geotools.data.joining.JoiningQuery;
 import org.geotools.factory.CommonFactoryFinder;
 import org.geotools.feature.Types;
@@ -50,7 +50,6 @@ import org.geotools.geometry.jts.ReferencedEnvelope;
 import org.opengis.feature.Feature;
 import org.opengis.feature.type.AttributeDescriptor;
 import org.opengis.feature.type.AttributeType;
-import org.opengis.feature.type.ComplexType;
 import org.opengis.feature.type.FeatureType;
 import org.opengis.feature.type.Name;
 import org.opengis.feature.type.PropertyDescriptor;
@@ -115,7 +114,7 @@ public class AppSchemaDataAccess implements DataAccess<FeatureType, Feature> {
                 AttributeType type = mapping.getTargetFeature().getType();
                 if (!(type instanceof FeatureType)) {
                     // nasty side-effect: constructor edits mapping to use this type proxy
-                    new NonFeatureTypeProxy((ComplexType) type, mapping);
+                    new NonFeatureTypeProxy(type, mapping);
                 }
             }
         } catch (RuntimeException e) {
@@ -337,7 +336,8 @@ public class AppSchemaDataAccess implements DataAccess<FeatureType, Feature> {
                 newQuery.setSortBy( sort.toArray(new SortBy[sort.size()])  );
             
                JoiningQuery jQuery = new JoiningQuery(newQuery);
-               jQuery.setQueryJoins(((JoiningQuery)query).getQueryJoins());                
+               jQuery.setQueryJoins(((JoiningQuery)query).getQueryJoins()); 
+               jQuery.setSubset(((JoiningQuery) query).isSubset());
                unrolledQuery = jQuery;
             } else {                
                 unrolledQuery = newQuery;

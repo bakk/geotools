@@ -16,7 +16,12 @@
  */
 package org.geotools.styling;
 
+import java.awt.Component;
+import java.awt.Graphics;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
 import java.io.File;
+import java.io.IOException;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.ArrayList;
@@ -27,6 +32,12 @@ import java.util.StringTokenizer;
 import java.util.logging.Level;
 import java.util.regex.Pattern;
 
+import javax.imageio.ImageIO;
+import javax.swing.Icon;
+import javax.swing.ImageIcon;
+import javax.xml.parsers.ParserConfigurationException;
+
+import org.geotools.data.Base64;
 import org.geotools.factory.CommonFactoryFinder;
 import org.geotools.factory.GeoTools;
 import org.geotools.filter.ExpressionDOMParser;
@@ -44,6 +55,7 @@ import org.w3c.dom.Element;
 import org.w3c.dom.NamedNodeMap;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
+import org.xml.sax.EntityResolver;
 import org.xml.sax.InputSource;
 
 /**
@@ -118,6 +130,9 @@ public class SLDParser {
     /** provides complete control for detecting relative onlineresources */
     private ResourceLocator onlineResourceLocator;
 
+    private EntityResolver entityResolver;
+    
+    
     /**
      * Create a Stylereader - use if you already have a dom to parse.
      * 
@@ -289,6 +304,16 @@ public class SLDParser {
     }
 
     /**
+     * Sets the EntityResolver implementation that will be used by DocumentBuilder to 
+     * resolve XML external entities.
+     * 
+     * @param entityResolver
+     */
+    public void setEntityResolver(EntityResolver entityResolver) {
+        this.entityResolver = entityResolver;
+    }
+    
+    /**
      * Internal setter for source url.
      */
     void setSourceUrl(URL sourceUrl) {
@@ -298,6 +323,18 @@ public class SLDParser {
         }
     }
 
+    protected javax.xml.parsers.DocumentBuilder newDocumentBuilder(boolean namespaceAware) throws ParserConfigurationException {
+        javax.xml.parsers.DocumentBuilderFactory dbf = javax.xml.parsers.DocumentBuilderFactory.newInstance();
+        dbf.setNamespaceAware(namespaceAware);        
+        javax.xml.parsers.DocumentBuilder db = dbf.newDocumentBuilder();
+        
+        if (entityResolver != null) {
+            db.setEntityResolver(entityResolver);
+        }
+        
+        return db;
+    }
+    
     /**
      * Read the xml inputsource provided and create a Style object for each user style found
      * 
@@ -307,12 +344,8 @@ public class SLDParser {
      *             if a parsing error occurs
      */
     public Style[] readXML() {
-        javax.xml.parsers.DocumentBuilderFactory dbf = javax.xml.parsers.DocumentBuilderFactory
-                .newInstance();
-        dbf.setNamespaceAware(true);
         try {
-            javax.xml.parsers.DocumentBuilder db = dbf.newDocumentBuilder();
-            dom = db.parse(source);
+            dom = newDocumentBuilder(true).parse(source);
         } catch (javax.xml.parsers.ParserConfigurationException pce) {
             throw new RuntimeException(pce);
         } catch (org.xml.sax.SAXException se) {
@@ -386,13 +419,8 @@ public class SLDParser {
     }
 
     public StyledLayerDescriptor parseSLD() {
-        javax.xml.parsers.DocumentBuilderFactory dbf = javax.xml.parsers.DocumentBuilderFactory
-                .newInstance();
-        dbf.setNamespaceAware(true);
-
         try {
-            javax.xml.parsers.DocumentBuilder db = dbf.newDocumentBuilder();
-            dom = db.parse(source);
+            dom = newDocumentBuilder(true).parse(source);
             // for our next trick do something with the dom.
 
             // NodeList nodes = findElements(dom, "StyledLayerDescriptor");
@@ -456,6 +484,12 @@ public class SLDParser {
             return child.getFirstChild().getNodeValue();
         else
             return null;
+    }
+
+    private static String getAttribute(Node node, String attrName) {
+        NamedNodeMap attributes = node.getAttributes();
+        Node attribute = attributes.getNamedItem(attrName);
+        return attribute == null ? null : attribute.getNodeValue();
     }
 
     private StyledLayer parseUserLayer(Node root) {
@@ -539,6 +573,15 @@ public class SLDParser {
             return null;
         else
             return ftc;
+    }
+
+    private static Icon parseIcon(String content) throws IOException {
+        byte[] bytes = Base64.decode(content);
+        BufferedImage image = ImageIO.read(new ByteArrayInputStream(bytes));
+        if (image == null) {
+            throw new IOException("invalid image content");
+        }
+        return new ImageIcon(image);
     }
 
     protected RemoteOWS parseRemoteOWS(Node root) {
@@ -665,10 +708,7 @@ public class SLDParser {
     public NamedStyle parseNamedStyle(Node n) {
         if (dom == null) {
             try {
-                javax.xml.parsers.DocumentBuilderFactory dbf = javax.xml.parsers.DocumentBuilderFactory
-                        .newInstance();
-                javax.xml.parsers.DocumentBuilder db = dbf.newDocumentBuilder();
-                dom = db.newDocument();
+                dom = newDocumentBuilder(false).newDocument();
             } catch (javax.xml.parsers.ParserConfigurationException pce) {
                 throw new RuntimeException(pce);
             }
@@ -717,10 +757,7 @@ public class SLDParser {
     public Style parseStyle(Node n) {
         if (dom == null) {
             try {
-                javax.xml.parsers.DocumentBuilderFactory dbf = javax.xml.parsers.DocumentBuilderFactory
-                        .newInstance();
-                javax.xml.parsers.DocumentBuilder db = dbf.newDocumentBuilder();
-                dom = db.newDocument();
+                dom = newDocumentBuilder(false).newDocument();
             } catch (javax.xml.parsers.ParserConfigurationException pce) {
                 throw new RuntimeException(pce);
             }
@@ -1645,6 +1682,7 @@ public class SLDParser {
 
         String format = "";
         String uri = "";
+        String content = null;
         Map<String, Object> paramList = new HashMap<String, Object>();
 
         NodeList children = root.getChildNodes();
@@ -1659,7 +1697,20 @@ public class SLDParser {
             if (childName == null) {
                 childName = child.getNodeName();
             }
-            if (childName.equalsIgnoreCase("OnLineResource")) {
+            if (childName.equalsIgnoreCase("InlineContent")) {
+                String contentEncoding = getAttribute(child, "encoding");
+                if (LOGGER.isLoggable(Level.FINEST)) {
+                    LOGGER.finest("inline content with encoding " + contentEncoding);
+                }
+                if ("base64".equals(contentEncoding)) {
+                    content = getFirstChildValue(child);
+                } else {
+                    content = "";
+                    if (LOGGER.isLoggable(Level.WARNING)) {
+                        LOGGER.warning("could not process <" + contentEncoding + "> content encoding");
+                    }
+                }
+            } else if (childName.equalsIgnoreCase("OnLineResource")) {
                 uri = parseOnlineResource(child);
             }
 
@@ -1680,13 +1731,33 @@ public class SLDParser {
             }
         }
 
-        URL url = onlineResourceLocator.locateResource(uri);
-
         ExternalGraphic extgraph;
-        if (url == null) {
-            extgraph = factory.createExternalGraphic(uri, format);
+        if (content != null) {
+            Icon icon = null;
+            if (content.length() > 0) {
+                try {
+                    icon = parseIcon(content);
+                }
+                catch (IOException e) {
+                    if (LOGGER.isLoggable(Level.WARNING)) {
+                        LOGGER.log(Level.WARNING, "could not parse graphic inline content: " + content, e);
+                    }
+                }
+            }
+
+            if (icon == null) {
+                LOGGER.warning("returning empty icon");
+                icon = EmptyIcon.INSTANCE;
+            }
+
+            extgraph = factory.createExternalGraphic(icon, format);
         } else {
-            extgraph = factory.createExternalGraphic(url, format);
+            URL url = onlineResourceLocator.locateResource(uri);
+            if (url == null) {
+                extgraph = factory.createExternalGraphic(uri, format);
+            } else {
+                extgraph = factory.createExternalGraphic(url, format);
+            }
         }
         extgraph.setCustomProperties(paramList);
         return extgraph;
@@ -1805,7 +1876,7 @@ public class SLDParser {
                 // process the css entry
                 //
                 if (res.equalsIgnoreCase(strokeString)) {
-                    Expression color = parseCssParameter(child, false);
+                    Expression color = parseCssParameter(child, true);
                     stroke.setColor(color);
                 } else if (res.equalsIgnoreCase("width") || res.equalsIgnoreCase("stroke-width")) {
                     Expression width = parseCssParameter(child, false);
@@ -2365,5 +2436,12 @@ public class SLDParser {
 
         return halo;
         
+    }
+
+    private static class EmptyIcon implements Icon {
+        public static final EmptyIcon INSTANCE = new EmptyIcon();
+        @Override public void paintIcon(Component c, Graphics g, int x, int y) { }
+        @Override public int getIconWidth() { return 1; }
+        @Override public int getIconHeight() { return 1; }
     }
 }

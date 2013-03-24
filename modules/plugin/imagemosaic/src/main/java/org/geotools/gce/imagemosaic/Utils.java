@@ -18,6 +18,7 @@ package org.geotools.gce.imagemosaic;
 
 import java.awt.Color;
 import java.awt.Rectangle;
+import java.awt.RenderingHints;
 import java.awt.Shape;
 import java.awt.geom.AffineTransform;
 import java.awt.geom.PathIterator;
@@ -50,14 +51,20 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Queue;
 import java.util.Set;
+import java.util.TimeZone;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
 import javax.imageio.stream.ImageInputStream;
+import javax.media.jai.BorderExtender;
 import javax.media.jai.Histogram;
+import javax.media.jai.ImageLayout;
+import javax.media.jai.JAI;
 import javax.media.jai.RasterFactory;
+import javax.media.jai.TileCache;
+import javax.media.jai.TileScheduler;
 import javax.media.jai.remote.SerializableRenderedImage;
 
 import net.sf.ehcache.Cache;
@@ -73,6 +80,7 @@ import org.geotools.data.DataStoreFactorySpi;
 import org.geotools.data.DataUtilities;
 import org.geotools.data.shapefile.ShapefileDataStoreFactory;
 import org.geotools.factory.Hints;
+import org.geotools.filter.visitor.DefaultFilterVisitor;
 import org.geotools.gce.imagemosaic.catalogbuilder.CatalogBuilder;
 import org.geotools.gce.imagemosaic.catalogbuilder.CatalogBuilder.ExceptionEvent;
 import org.geotools.gce.imagemosaic.catalogbuilder.CatalogBuilder.ProcessingEvent;
@@ -82,7 +90,9 @@ import org.geotools.referencing.operation.matrix.XAffineTransform;
 import org.geotools.resources.i18n.ErrorKeys;
 import org.geotools.resources.i18n.Errors;
 import org.geotools.util.Converters;
+import org.geotools.util.Range;
 import org.geotools.util.Utilities;
+import org.opengis.filter.spatial.BBOX;
 
 import com.vividsolutions.jts.geom.Envelope;
 import com.vividsolutions.jts.geom.Geometry;
@@ -98,12 +108,13 @@ import com.vividsolutions.jts.geom.Geometry;
  * @source $URL$
  */
 public class Utils {
+    
+    public static final String RANGE_SPLITTER_CHAR = ";";
 
     public final static String INDEXER_PROPERTIES = "indexer.properties";
     
     /** EHCache instance to cache histograms */ 
     private static Cache ehcache;    
-    
     
     /** RGB to GRAY coefficients (for Luminance computation) */
     public final static double RGB_TO_GRAY_MATRIX [][]= {{ 0.114, 0.587, 0.299, 0 }};
@@ -136,7 +147,10 @@ public class Utils {
         public final static String HETEROGENEOUS = "Heterogeneous";
         public static final String TIME_ATTRIBUTE = "TimeAttribute";
         public static final String ELEVATION_ATTRIBUTE = "ElevationAttribute";
-        public final static String CACHING= "Caching";
+        public static final String ADDITIONAL_DOMAIN_ATTRIBUTES = "AdditionalDomainAttributes";
+        public final static String TYPENAME= "TypeName";
+        public final static String PATH_TYPE=  "PathType";
+        public final static String PARENT_LOCATION=  "ParentLocation";
         
         //Indexer Properties specific properties
         public  static final String RECURSIVE = "Recursive";
@@ -144,6 +158,35 @@ public class Utils {
         public static final String SCHEMA = "Schema";
         public static final String RESOLUTION_LEVELS = "ResolutionLevels";
         public static final String PROPERTY_COLLECTORS = "PropertyCollectors";
+        public final static String CACHING= "Caching";        
+    }
+        /**
+     * Extracts a bbox from a filter in case there is at least one.
+     * 
+     * I am simply looking for the BBOX filter but I am sure we could
+     * use other filters as well. I will leave this as a todo for the moment.
+     * 
+     * @author Simone Giannecchini, GeoSolutions SAS.
+     * @todo TODO use other spatial filters as well
+     */
+    public static class BBOXFilterExtractor extends DefaultFilterVisitor{
+    
+    	public ReferencedEnvelope getBBox() {
+    		return bbox;
+    	}
+    	private ReferencedEnvelope bbox;
+    	@Override
+    	public Object visit(BBOX filter, Object data) {
+    		final ReferencedEnvelope bbox= ReferencedEnvelope.reference(filter.getBounds());
+    		if(this.bbox!=null){
+    		    this.bbox=(ReferencedEnvelope) this.bbox.intersection(bbox);
+    		}
+    		else{
+    		    this.bbox=bbox;
+    		}
+    		return super.visit(filter, data);
+    	}
+    	
     }
         /**
 	 * Logger.
@@ -262,6 +305,11 @@ public class Utils {
 	        final URL sourceURL,
 		final String defaultLocationAttribute, 
 		final Set<String> ignorePropertiesSet) {
+		
+		if(LOGGER.isLoggable(Level.FINE)){
+			LOGGER.log(Level.FINE,"Trying to load properties file from URL:"+sourceURL);
+		}
+		
 		// ret value
 		final MosaicConfigurationBean retValue = new MosaicConfigurationBean();
 		final boolean ignoreSome = ignorePropertiesSet != null && !ignorePropertiesSet.isEmpty();
@@ -308,8 +356,7 @@ public class Utils {
 		// resolutions levels
 		//              
 		if (!ignoreSome || !ignorePropertiesSet.contains(Prop.LEVELS)) {
-			int levelsNumber = Integer.parseInt(properties.getProperty(
-					Prop.LEVELS_NUM, "1").trim());
+			int levelsNumber = Integer.parseInt(properties.getProperty(Prop.LEVELS_NUM, "1").trim());
 			retValue.setLevelsNum(levelsNumber);
 			if (!properties.containsKey(Prop.LEVELS)) {
 				if (LOGGER.isLoggable(Level.INFO))
@@ -320,8 +367,7 @@ public class Utils {
 			pairs = levels.split(" ");
 			if (pairs == null || pairs.length != levelsNumber) {
 				if (LOGGER.isLoggable(Level.INFO))
-					LOGGER
-							.info("Levels number is different from the provided number of levels resoltion.");
+					LOGGER.info("Levels number is different from the provided number of levels resoltion.");
 				return null;
 			}
 			final double[][] resolutions = new double[levelsNumber][2];
@@ -329,14 +375,21 @@ public class Utils {
 				pair = pairs[i].split(",");
 				if (pair == null || pair.length != 2) {
 					if (LOGGER.isLoggable(Level.INFO))
-						LOGGER
-								.info("OverviewLevel number is different from the provided number of levels resoltion.");
+						LOGGER.info("OverviewLevel number is different from the provided number of levels resoltion.");
 					return null;
 				}
 				resolutions[i][0] = Double.parseDouble(pair[0]);
 				resolutions[i][1] = Double.parseDouble(pair[1]);
 			}
 			retValue.setLevels(resolutions);
+		}
+
+		//
+		// typename, is mandatory when we don't use shapeiles
+		//              
+		if (!ignoreSome || !ignorePropertiesSet.contains(Prop.TYPENAME)) {
+			String typeName = properties.getProperty(Prop.TYPENAME, null);
+			retValue.setTypeName(typeName);
 		}
 
 		//
@@ -366,6 +419,13 @@ public class Utils {
 			retValue.setElevationAttribute(elevationAttribute);
 		}
 
+		//
+                // additional domain attribute is optional
+                //
+                if (properties.containsKey(Prop.ADDITIONAL_DOMAIN_ATTRIBUTES)) {
+                        final String additionalDomainAttributes = properties.getProperty(Prop.ADDITIONAL_DOMAIN_ATTRIBUTES).trim();
+                        retValue.setAdditionalDomainAttributes(additionalDomainAttributes);
+                }
 
 		//
 		// caching
@@ -386,7 +446,7 @@ public class Utils {
                     if(!properties.containsKey(Prop.NAME)) {
                             if(LOGGER.isLoggable(Level.SEVERE))
                                     LOGGER.severe("Required key Name not found.");          
-                            return  null;
+                            return null;
                     }                       
                     String coverageName = properties.getProperty(Prop.NAME).trim();
                     retValue.setName(coverageName);
@@ -437,8 +497,7 @@ public class Utils {
 		if (!ignoreSome
 				|| !ignorePropertiesSet.contains(Prop.LOCATION_ATTRIBUTE)) {
 			retValue.setLocationAttribute(properties.getProperty(
-					Prop.LOCATION_ATTRIBUTE, Utils.DEFAULT_LOCATION_ATTRIBUTE)
-					.trim());
+					Prop.LOCATION_ATTRIBUTE, Utils.DEFAULT_LOCATION_ATTRIBUTE).trim());
 		}
 
 		// return value
@@ -504,7 +563,7 @@ public class Utils {
 			IOFileFilter... filters) {
 		IOFileFilter retFilter = inputFilter;
 		for (IOFileFilter filter : filters) {
-			retFilter = FileFilterUtils.andFileFilter(retFilter,
+			retFilter = FileFilterUtils.and(retFilter,
 					FileFilterUtils.notFileFilter(filter));
 		}
 		return retFilter;
@@ -714,13 +773,7 @@ public class Utils {
 			// create a datastore as instructed
 			final DataStoreFactorySpi spi = (DataStoreFactorySpi) Class.forName(SPIClass).newInstance();
 			return createDataStoreParamsFromPropertiesFile(properties, spi);
-		} catch (ClassNotFoundException e) {
-			final IOException ioe = new IOException();
-			throw (IOException) ioe.initCause(e);
-		} catch (InstantiationException e) {
-			final IOException ioe = new IOException();
-			throw (IOException) ioe.initCause(e);
-		} catch (IllegalAccessException e) {
+		} catch (Exception e) {
 			final IOException ioe = new IOException();
 			throw (IOException) ioe.initCause(e);
 		}
@@ -859,8 +912,9 @@ public class Utils {
 		final Param[] paramsInfo = spi.getParametersInfo();
 		for (Param p : paramsInfo) {
 			// search for this param and set the value if found
-			if (properties.containsKey(p.key))
-				params.put(p.key, (Serializable) Converters.convert(properties.getProperty(p.key), p.type));
+			if (properties.containsKey(p.key)){
+			    params.put(p.key, (Serializable) Converters.convert(properties.getProperty(p.key), p.type));
+			}
 			else if (p.required && p.sample == null)
 				throw new IOException("Required parameter missing: "+ p.toString());
 		}
@@ -935,7 +989,7 @@ public class Utils {
                         // define a datastore
                         final File[] properties = sourceFile
                                         .listFiles((FilenameFilter) FileFilterUtils
-                                                        .andFileFilter(
+                                                        .and(
                                                                         FileFilterUtils
                                                                                         .notFileFilter(FileFilterUtils
                                                                                                         .nameFileFilter("datastore.properties")),
@@ -1073,6 +1127,12 @@ public class Utils {
     static final double AFFINE_IDENTITY_EPS = 1E-6;
 
     public static final boolean DEFAULT_COLOR_EXPANSION_BEHAVIOR = false;
+
+    public static final TimeZone UTC_TIME_ZONE = TimeZone.getTimeZone("UTC");
+
+	static final String DESCENDING_ORDER_IDENTIFIER = " D"; //SortOrder.DESCENDING.identifier();
+
+	static final String ASCENDING_ORDER_IDENTIFIER = " A"; //SortOrder.ASCENDING.identifier();
     
     /**
      * Private constructor to initialize the ehCache instance.
@@ -1287,4 +1347,64 @@ public class Utils {
 	    // turn it into a rectangle
 	    return new Rectangle2D.Double(minx, miny, maxx - minx, maxy - miny).getBounds();
 	}
+
+    public static ImageLayout getImageLayoutHint(RenderingHints renderHints) {
+        if (renderHints == null||!renderHints.containsKey(JAI.KEY_IMAGE_LAYOUT)) {
+            return null;
+        } else {
+            return (ImageLayout) renderHints.get(JAI.KEY_IMAGE_LAYOUT);
+        }
+    }
+
+    public static TileCache getTileCacheHint(RenderingHints renderHints) {
+        if (renderHints == null||!renderHints.containsKey(JAI.KEY_TILE_CACHE)) {
+            return null;
+        } else {
+            return (TileCache) renderHints.get(JAI.KEY_TILE_CACHE);
+        }
+    }
+
+    public static BorderExtender getBorderExtenderHint(RenderingHints renderHints) {
+        if (renderHints == null||!renderHints.containsKey(JAI.KEY_BORDER_EXTENDER)) {
+            return null;
+        } else {
+            return (BorderExtender) renderHints.get(JAI.KEY_BORDER_EXTENDER);
+        }
+    }
+    
+    public static TileScheduler getTileSchedulerHint(RenderingHints renderHints) {
+        if (renderHints == null||!renderHints.containsKey(JAI.KEY_TILE_SCHEDULER)) {
+            return null;
+        } else {
+            return (TileScheduler) renderHints.get(JAI.KEY_TILE_SCHEDULER);
+        }
+    }
+    
+    /**
+     * Create a Range of numbers from a couple of values.
+     * @param firstValue
+     * @param secondValue
+     * @return
+     */
+    public static Range<? extends Number> createRange(Object firstValue, Object secondValue) {
+        Class<? extends Object> targetClass = firstValue.getClass();
+        Class<? extends Object> target2Class = secondValue.getClass();
+        if (targetClass != target2Class) {
+            throw new IllegalArgumentException("The 2 values need to belong to the same class:\n"
+                    + "firstClass = " + targetClass.toString() + "; secondClass = " + targetClass.toString()); 
+        }
+        if (targetClass == Byte.class) {
+            return new Range<Byte>(Byte.class, (Byte) firstValue, (Byte) secondValue);
+        } else if (targetClass == Short.class) {
+            return new Range<Short>(Short.class, (Short) firstValue, (Short) secondValue);
+        } else if (targetClass == Integer.class) {
+            return new Range<Integer>(Integer.class, (Integer) firstValue, (Integer) secondValue);
+        } else if (targetClass == Long.class) {
+            return new Range<Long>(Long.class, (Long) firstValue, (Long) secondValue);
+        } else if (targetClass == Float.class) {
+            return new Range<Float>(Float.class, (Float) firstValue, (Float) secondValue);
+        } else if (targetClass == Double.class) {
+            return new Range<Double>(Double.class, (Double) firstValue, (Double) secondValue);
+        } else return null;
+    }
 }

@@ -17,33 +17,48 @@
 package org.geotools.renderer.lite;
 
 import static org.easymock.EasyMock.anyObject;
-import static org.easymock.EasyMock.createNiceMock;
 import static org.easymock.EasyMock.expect;
-import static org.easymock.EasyMock.replay;
+import static org.easymock.classextension.EasyMock.createNiceMock;
+import static org.easymock.classextension.EasyMock.replay;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
 
 import java.awt.Graphics2D;
 import java.awt.Rectangle;
 import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
+import java.awt.image.RenderedImage;
+import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.Iterator;
+import java.util.List;
+import java.util.concurrent.BlockingQueue;
 
-import junit.framework.TestCase;
-
+import org.geotools.coverage.grid.GridCoverage2D;
+import org.geotools.coverage.grid.GridCoverageFactory;
 import org.geotools.data.Query;
 import org.geotools.data.simple.SimpleFeatureCollection;
+import org.geotools.data.simple.SimpleFeatureIterator;
 import org.geotools.data.simple.SimpleFeatureSource;
-import org.geotools.feature.FeatureCollections;
+import org.geotools.feature.DefaultFeatureCollection;
+import org.geotools.feature.FeatureCollection;
 import org.geotools.feature.simple.SimpleFeatureBuilder;
 import org.geotools.feature.simple.SimpleFeatureTypeBuilder;
+import org.geotools.geometry.Envelope2D;
 import org.geotools.geometry.jts.ReferencedEnvelope;
 import org.geotools.map.DefaultMapContext;
+import org.geotools.map.FeatureLayer;
+import org.geotools.map.GridCoverageLayer;
+import org.geotools.map.MapContent;
 import org.geotools.map.MapContext;
 import org.geotools.referencing.CRS;
 import org.geotools.referencing.crs.DefaultGeographicCRS;
 import org.geotools.renderer.RenderListener;
+import org.geotools.renderer.lite.StreamingRenderer.RenderingBlockingQueue;
+import org.geotools.renderer.lite.StreamingRenderer.RenderingRequest;
 import org.geotools.styling.Style;
 import org.geotools.styling.StyleBuilder;
+import org.junit.Before;
 import org.junit.Test;
 import org.opengis.feature.simple.SimpleFeature;
 import org.opengis.feature.simple.SimpleFeatureType;
@@ -66,7 +81,7 @@ import com.vividsolutions.jts.geom.Point;
  *
  * @source $URL$
  */
-public class StreamingRendererTest extends TestCase {
+public class StreamingRendererTest {
 
     private SimpleFeatureType testFeatureType;
     private SimpleFeatureType testPointFeatureType;
@@ -74,8 +89,8 @@ public class StreamingRendererTest extends TestCase {
     protected int errors;
     protected int features;
     
-    protected void setUp() throws Exception {
-        super.setUp();
+    @Before
+    public void setUp() throws Exception {
 
         SimpleFeatureTypeBuilder builder = new SimpleFeatureTypeBuilder();
         builder.setName("Lines");
@@ -88,7 +103,7 @@ public class StreamingRendererTest extends TestCase {
     }
 
     public SimpleFeatureCollection createLineCollection() throws Exception {
-        SimpleFeatureCollection fc = FeatureCollections.newCollection();
+        DefaultFeatureCollection fc = new DefaultFeatureCollection();
         fc.add(createLine(-177, 0, -177, 10));
         fc.add(createLine(-177, 0, -200, 0));
         fc.add(createLine(-177, 0, -177, 100));
@@ -109,6 +124,12 @@ public class StreamingRendererTest extends TestCase {
         StyleBuilder sb = new StyleBuilder();
         return sb.createStyle(sb.createLineSymbolizer());
     }
+    
+    private Style createRasterStyle() {
+        StyleBuilder sb = new StyleBuilder();
+        return sb.createStyle(sb.createRasterSymbolizer());
+    }
+    
     private Style createPointStyle() {
         StyleBuilder sb = new StyleBuilder();
         return sb.createStyle(sb.createPointSymbolizer());
@@ -156,12 +177,12 @@ public class StreamingRendererTest extends TestCase {
         final Exception sentinel = new RuntimeException("This is the one that should be thrown in hasNext()");
         
         // setup the mock necessary to have the renderer hit into the exception in hasNext()
-        Iterator it2 = createNiceMock(Iterator.class);
+        SimpleFeatureIterator it2 = createNiceMock(SimpleFeatureIterator.class);
         expect(it2.hasNext()).andThrow(sentinel).anyTimes();
         replay(it2);
         
         SimpleFeatureCollection fc = createNiceMock(SimpleFeatureCollection.class);
-        expect(fc.iterator()).andReturn(it2);
+        expect(fc.features()).andReturn(it2);
         expect(fc.size()).andReturn(200);
         expect(fc.getSchema()).andReturn(testFeatureType).anyTimes();
         replay(fc);
@@ -211,6 +232,66 @@ public class StreamingRendererTest extends TestCase {
         assertEquals(1, errors);
     }
     
+    @Test
+    public void testDeadlockOnException() throws Exception {
+        
+        ReferencedEnvelope reWgs = new ReferencedEnvelope(new Envelope(-180,
+                180, -90, 90), DefaultGeographicCRS.WGS84);
+        
+        // create the grid coverage that throws a OOM
+        BufferedImage testImage = new BufferedImage(200, 200, BufferedImage.TYPE_4BYTE_ABGR);
+        GridCoverage2D testCoverage = new GridCoverageFactory().create("test", testImage, reWgs);
+        GridCoverage2D oomCoverage = new GridCoverage2D("test", testCoverage) {
+          
+            @Override
+            public RenderedImage getRenderedImage() {
+                throw new OutOfMemoryError("Boom!");
+            }
+        };
+        
+        // also have a collections of features to create the deadlock once the painter
+        // thread is dead
+        SimpleFeatureCollection lines = createLineCollection();
+
+        Style rasterStyle = createRasterStyle();
+        Style lineStyle = createLineStyle();
+        
+        MapContent mapContent = new MapContent();
+        mapContent.addLayer(new GridCoverageLayer(oomCoverage, rasterStyle));
+        mapContent.addLayer(new FeatureLayer(lines, lineStyle));
+     
+        final StreamingRenderer sr = new StreamingRenderer() {
+            
+            // makes it easy to reproduce the deadlock, just two features are sufficient
+            protected BlockingQueue<RenderingRequest> getRequestsQueue() {
+                return new RenderingBlockingQueue(1);
+            }  
+        };
+        sr.setMapContent(mapContent);
+        final List<Exception> exceptions = new ArrayList<Exception>();
+        sr.addRenderListener(new RenderListener() {
+            public void featureRenderer(SimpleFeature feature) {
+                features++;
+            }
+            
+            public void errorOccurred(Exception e) {
+                errors++;
+                exceptions.add(e);
+            }
+        });
+        errors = 0;
+        features = 0;
+        BufferedImage image = new BufferedImage(200, 200,BufferedImage.TYPE_4BYTE_ABGR);
+        sr.paint((Graphics2D) image.getGraphics(), new Rectangle(200, 200),reWgs);
+        
+        // all the lines should have been painted, the coverage reports as painted too 
+        // since the reporting happens in the main thread that does not error
+        assertEquals(4, features);
+        assertEquals(1, errors);
+        assertTrue(exceptions.get(0).getCause() instanceof OutOfMemoryError);
+    }
+    
+    
     /**
      * Test that point features are rendered at the expected 
      * image coordinates when the map is rotated.
@@ -223,11 +304,11 @@ public class StreamingRendererTest extends TestCase {
         final Rectangle screen = new Rectangle(0, 0, 100, 50);
         final Envelope world = new Envelope(0, 50, 0, -100);
         final AffineTransform worldToScreen = AffineTransform.getRotateInstance(Math.toRadians(90), 0, 0);
-        SimpleFeatureCollection fc = FeatureCollections.newCollection();
+        DefaultFeatureCollection fc = new DefaultFeatureCollection();
         fc.add(createPoint(0, 0));
         fc.add(createPoint(world.getMaxX(), world.getMinY()));
         MapContext mapContext = new DefaultMapContext(DefaultGeographicCRS.WGS84);
-        mapContext.addLayer(fc, createPointStyle());
+        mapContext.addLayer((FeatureCollection)fc, createPointStyle());
         BufferedImage image = new BufferedImage(screen.width, screen.height,
                 BufferedImage.TYPE_4BYTE_ABGR);
         final StreamingRenderer sr = new StreamingRenderer();
@@ -238,6 +319,6 @@ public class StreamingRendererTest extends TestCase {
                 screen.height / 2) == 0);
         assertTrue("Pixel should be drawn at image max corner ", image.getRGB(screen.width - 1,
                 screen.height - 1) != 0);
-
     }
+    
 }

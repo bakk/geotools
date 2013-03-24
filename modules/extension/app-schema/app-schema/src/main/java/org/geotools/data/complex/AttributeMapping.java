@@ -20,7 +20,7 @@ package org.geotools.data.complex;
 import java.util.Collections;
 import java.util.Map;
 
-import org.geotools.data.complex.filter.XPath.StepList;
+import org.geotools.data.complex.filter.XPathUtil.StepList;
 import org.geotools.util.Utilities;
 import org.opengis.feature.type.AttributeType;
 import org.opengis.feature.type.Name;
@@ -46,6 +46,8 @@ public class AttributeMapping {
     protected StepList targetXPath;
 
     private boolean isMultiValued;
+    
+    private boolean encodeIfEmpty;
     
     private boolean isList;
 
@@ -97,6 +99,10 @@ public class AttributeMapping {
 
     public boolean isMultiValued() {
         return isMultiValued;
+    }
+    
+    public boolean encodeIfEmpty() {
+        return encodeIfEmpty;
     }
     
     public boolean isList() {
@@ -153,6 +159,10 @@ public class AttributeMapping {
     
     public void setInstanceXpath(String instancePath) {
         this.instancePath = instancePath;
+    }
+    
+    public void setEncodeIfEmpty(boolean encodeIfEmpty) {
+        this.encodeIfEmpty = encodeIfEmpty;
     }
     
     public void setList(boolean isList) {

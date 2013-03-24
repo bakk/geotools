@@ -2598,6 +2598,7 @@ public class WMSComplexTypes {
 			HashMap dimensions = new HashMap();
 			HashMap extents = new HashMap();
 			List styles = new ArrayList();
+			List metadataURLS = new ArrayList();
 
 			for (int i = 0; i < value.length; i++) {
 				if (sameName(elems[0], value[i])) {
@@ -2656,9 +2657,10 @@ public class WMSComplexTypes {
 				// if (sameName(elems[11], value[i])) {
 				// //TODO identifier ignored
 				// }
-				// if (sameName(elems[12], value[i])) {
-				// //TODO metadataURL ignore
-				// }
+				 if (sameName(elems[12], value[i])) {
+					MetadataURL metadataUrl = (MetadataURL)value[i].getValue();
+					metadataURLS.add(metadataUrl);
+				 }
 				// if (sameName(elems[13], value[i])) {
 				// //TODO dataURL ignored
 				// }
@@ -2696,6 +2698,7 @@ public class WMSComplexTypes {
 			layer.setDimensions(dimensions);
 			layer.setExtents(extents);
 			layer.setStyles(styles);
+			layer.setMetadataURL(metadataURLS);
             
             layer.setChildren((Layer[]) childLayers.toArray(new Layer[childLayers.size()]));
 
@@ -2704,10 +2707,10 @@ public class WMSComplexTypes {
 			// Do not set queryable unless it is explicitly specified
 			String queryable = attrs.getValue("queryable");
 			if (queryable != null) {
-				if ("1".equals(queryable)) {
+				if ("1".equals(queryable) || "true".equalsIgnoreCase(queryable)) {
 					layer.setQueryable(true);
-				} else if ("0".equals(queryable)) {
-					layer.setQueryable(new Boolean(queryable).booleanValue());
+				} else if ("0".equals(queryable) || "false".equalsIgnoreCase(queryable)) {
+				    layer.setQueryable( false );
 				}
 			}
 			String cascaded = attrs.getValue("cascaded");
@@ -3639,7 +3642,12 @@ public class WMSComplexTypes {
 		public Object getValue(Element element, ElementValue[] value,
 				Attributes attrs, Map hints) throws SAXException,
 				OperationNotSupportedException {
-			return null;
+                    String type = attrs.getValue("type").toString();
+                    URL url = (URL)value[1].getValue();
+                    String format = (String)(((Object[])value[0].getValue())[0]);
+                    MetadataURL metadataURL = new MetadataURL( url, type, format);
+                  
+                    return metadataURL;
 			// throw new OperationNotSupportedException();
 		}
 
@@ -4142,6 +4150,7 @@ public class WMSComplexTypes {
 				Attributes attrs, Map hints) throws SAXException,
 				OperationNotSupportedException {
 			StyleImpl style = new StyleImpl();
+			List legendURLS = new ArrayList();
 			
 			for (int i = 0; i < value.length; i++) {
 				
@@ -4161,7 +4170,7 @@ public class WMSComplexTypes {
 				}
 				
 				if (sameName(elems[3], value[i])) {
-					//TODO Implement LegendURL
+					legendURLS.add((String)value[i].getValue());
 				}
 				
 				if (sameName(elems[4], value[i])) {
@@ -4172,7 +4181,7 @@ public class WMSComplexTypes {
 					//TODO implement StyleURL
 				}
 			}
-			
+			style.setLegendURLs(legendURLS);
 			return style;
 		}
 
@@ -4273,7 +4282,9 @@ public class WMSComplexTypes {
 		public Object getValue(Element element, ElementValue[] value,
 				Attributes attrs, Map hints) throws SAXException,
 				OperationNotSupportedException {
-			return null;
+                    
+                    String legendURL = value[1].getValue().toString();
+                    return legendURL;
 			// throw new OperationNotSupportedException();
 		}
 

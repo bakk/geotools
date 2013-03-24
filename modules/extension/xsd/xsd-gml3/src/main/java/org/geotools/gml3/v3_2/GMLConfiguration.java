@@ -18,11 +18,13 @@ package org.geotools.gml3.v3_2;
 
 import javax.xml.namespace.QName;
 
+import org.geotools.gml2.SrsSyntax;
 import org.geotools.gml2.bindings.GMLCoordinatesTypeBinding;
 import org.geotools.gml3.bindings.AbstractFeatureCollectionTypeBinding;
 import org.geotools.gml3.bindings.AbstractFeatureTypeBinding;
 import org.geotools.gml3.bindings.AbstractGeometryTypeBinding;
 import org.geotools.gml3.bindings.AbstractRingPropertyTypeBinding;
+import org.geotools.gml3.bindings.ArcStringTypeBinding;
 import org.geotools.gml3.bindings.ArcTypeBinding;
 import org.geotools.gml3.bindings.BoundingShapeTypeBinding;
 import org.geotools.gml3.bindings.CircleTypeBinding;
@@ -92,6 +94,11 @@ public class GMLConfiguration extends Configuration {
     public static final QName NO_SRS_DIMENSION = org.geotools.gml3.GMLConfiguration.NO_SRS_DIMENSION;
 
     /**
+     * gml3 configuration used to delegate to for configuration
+     */
+    org.geotools.gml3.GMLConfiguration delegate;
+
+    /**
      * Creates a new configuration.
      * 
      * @generated
@@ -106,25 +113,38 @@ public class GMLConfiguration extends Configuration {
      */  
     public GMLConfiguration(boolean arcSurfaceSupport) {
        super(GML.getInstance());
-       this.extArcSurfaceSupport = arcSurfaceSupport;
+       delegate = new org.geotools.gml3.GMLConfiguration(arcSurfaceSupport);
+       delegate.setSrsSyntax(SrsSyntax.OGC_URN);
     }
-    
-    /**
-     * extended support for arcs and surface flag
-     */
-    boolean extArcSurfaceSupport = false;
     
     /**
      * Flag that when set triggers extended support for arcs and surfaces.
      */
     public void setExtendedArcSurfaceSupport(boolean extArcSurfaceSupport) {
-        this.extArcSurfaceSupport = extArcSurfaceSupport;
+        delegate.setExtendedArcSurfaceSupport(extArcSurfaceSupport);
     }
     
     public boolean isExtendedArcSurfaceSupport() {
-        return extArcSurfaceSupport;
+        return delegate.isExtendedArcSurfaceSupport();
     }
-    
+
+    /**
+     * Sets the syntax to use for encoding srs uris.
+     * <p>
+     * If this method is not explicitly called {@link SrsSyntax#URN2} is used as the default.
+     * </p>
+     */
+    public void setSrsSyntax(SrsSyntax srsSyntax) {
+        delegate.setSrsSyntax(srsSyntax);
+    }
+
+    /**
+     * Returns the syntax to use for encoding srs uris.
+     */
+    public SrsSyntax getSrsSyntax() {
+        return delegate.getSrsSyntax();
+    }
+
     /**
      * Registers the bindings for the configuration.
      *
@@ -212,6 +232,8 @@ public class GMLConfiguration extends Configuration {
         
         //extended bindings for arc/surface support
         if (isExtendedArcSurfaceSupport()) {
+            container.registerComponentImplementation(GML.ArcStringType,
+                    ArcStringTypeBinding.class);
             container.registerComponentImplementation(GML.ArcType,
                     ArcTypeBinding.class);
             container.registerComponentImplementation(GML.CircleType,
@@ -250,7 +272,8 @@ public class GMLConfiguration extends Configuration {
     @Override
     protected void configureContext(MutablePicoContainer container) {
         super.configureContext(container);
-        new org.geotools.gml3.GMLConfiguration(extArcSurfaceSupport).configureContext(container);
+
+        delegate.configureContext(container);
         container.unregisterComponent(GML3EncodingUtils.class);
         container.registerComponentInstance(new GML32EncodingUtils());
     }

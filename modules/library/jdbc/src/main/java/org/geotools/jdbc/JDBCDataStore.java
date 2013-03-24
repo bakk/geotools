@@ -193,12 +193,6 @@ public final class JDBCDataStore extends ContentDataStore
     protected static final String FEATURE_ASSOCIATION_TABLE = "feature_associations";
     
     /**
-     * The default primary key finder, looks in the default metadata table first, uses heuristics later
-     */
-    protected static final PrimaryKeyFinder DEFAULT_PRIMARY_KEY_FINDER = new CompositePrimaryKeyFinder(
-            new MetadataTablePrimaryKeyFinder(), new HeuristicPrimaryKeyFinder());
-    
-    /**
      * The envelope returned when bounds is called against a geometryless feature type
      */
     protected static final ReferencedEnvelope EMPTY_ENVELOPE = new ReferencedEnvelope();  
@@ -262,9 +256,10 @@ public final class JDBCDataStore extends ContentDataStore
     protected boolean exposePrimaryKeyColumns = false;
     
     /**
-     * Finds the primary key definitions
+     * Finds the primary key definitions (instantiated here because the finders might keep state)
      */
-    protected PrimaryKeyFinder primaryKeyFinder = DEFAULT_PRIMARY_KEY_FINDER;
+    protected PrimaryKeyFinder primaryKeyFinder = new CompositePrimaryKeyFinder(
+            new MetadataTablePrimaryKeyFinder(), new HeuristicPrimaryKeyFinder());
     
     /**
      * Contains the SQL definition of the various virtual tables
@@ -775,7 +770,7 @@ public final class JDBCDataStore extends ContentDataStore
                 }
             }
             finally {
-                features.close( fi );
+                fi.close();
             }
         }
         
@@ -853,7 +848,7 @@ public final class JDBCDataStore extends ContentDataStore
 
         try {
             DatabaseMetaData metaData = cx.getMetaData();
-            ResultSet tables = metaData.getTables(null, databaseSchema, "%",
+            ResultSet tables = metaData.getTables(cx.getCatalog(), databaseSchema, "%",
                     new String[] { "TABLE", "VIEW" });
             if(fetchSize > 1) {
                 tables.setFetchSize(fetchSize);
@@ -1120,7 +1115,7 @@ public final class JDBCDataStore extends ContentDataStore
 
         Statement st = null;
         ResultSet rs = null;
-        ReferencedEnvelope bounds = new ReferencedEnvelope(featureType
+        ReferencedEnvelope bounds = ReferencedEnvelope.create(featureType
                 .getCoordinateReferenceSystem());
         try {
             // try optimized bounds computation only if we're targeting the entire table
@@ -1646,6 +1641,9 @@ public final class JDBCDataStore extends ContentDataStore
     protected final Connection createConnection() {
         try {
             LOGGER.fine( "CREATE CONNECTION");
+            if( getDataSource() == null ){
+                throw new NullPointerException("JDBC DataSource not available after dispose() has been called");
+            }
             Connection cx = getDataSource().getConnection();
             // isolation level is not set in the datastore, see 
             // http://jira.codehaus.org/browse/GEOT-2021 
@@ -1665,12 +1663,12 @@ public final class JDBCDataStore extends ContentDataStore
     }
     
     /**
-     * Releases an existing connection.
+     * Releases an existing connection (paying special attention to {@link Transaction#AUTO_COMMIT}.
+     * <p>
+     * If the state is based off the AUTO_COMMIT transaction - close using {@link #closeSafe(Connection)}.
+     * Otherwise wait until the transaction itself is closed to close the connection.
      */
     protected final void releaseConnection( Connection cx, JDBCState state ) {
-        //if the state is based off the AUTO_COMMIT transaction, close the 
-        // connection, otherwise wait until the transaction itself is closed to 
-        // close the connection
         if ( state.getTransaction() == Transaction.AUTO_COMMIT ) {
             closeSafe( cx );
         }

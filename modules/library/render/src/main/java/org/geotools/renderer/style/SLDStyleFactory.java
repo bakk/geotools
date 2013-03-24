@@ -644,7 +644,7 @@ public class SLDStyleFactory {
 				// to 16
 				if (size <= 0)
 					size = 16;
-				ms2d.setSize((int) size);
+				ms2d.setSize(size);
 				ms2d.setRotation(rotation);
 				retval = ms2d;
 
@@ -1189,6 +1189,11 @@ public class SLDStyleFactory {
 	private Icon getIcon(ExternalGraphic eg, Object feature, double size) {
 		if (eg == null)
 			return null;
+
+        Icon inlineContent = eg.getInlineContent();
+        if (inlineContent != null) {
+            return inlineContent;
+        }
 
 		// extract the url
 		String strLocation;

@@ -16,7 +16,7 @@
   <parent>
     <groupId>org.geotools</groupId>
     <artifactId>modules</artifactId>
-    <version>8-SNAPSHOT</version>
+    <version>10-SNAPSHOT</version>
   </parent>
 
 
@@ -155,15 +155,21 @@
        </modules>
      </profile>
      <profile>
-       <id>geogit-versioned</id>
+       <id>wfs-ng</id>
+       <modules>
+         <module>wfs-ng</module>
+       </modules>
+     </profile>
+     <profile>
+       <id>transform</id>
        <activation>
          <property><name>all</name></property>
        </activation>
        <modules>
-         <module>geogit-versioned</module>
+         <module>transform</module>
+
        </modules>
      </profile>
-
      <profile>
        <id>unsupported</id>
        <activation>
@@ -173,7 +179,6 @@
          <module>csv</module>
          <module>epsg-oracle</module>
          <module>jdbc-ng</module>
-         <module>postgis-versioned</module>
          <module>vpf</module>
          <module>matfile5</module>
          <module>sfs</module>
@@ -193,7 +198,6 @@
     <module>process</module>
     <module>wfs</module>
     <module>geojson</module>
-    <module>grid</module>
   </modules>
 
 </project>

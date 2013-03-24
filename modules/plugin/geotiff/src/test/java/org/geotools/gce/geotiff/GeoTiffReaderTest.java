@@ -20,8 +20,10 @@ package org.geotools.gce.geotiff;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Rectangle;
+import java.awt.geom.AffineTransform;
 import java.awt.image.RenderedImage;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.util.logging.Logger;
 
@@ -35,10 +37,12 @@ import org.geotools.coverage.grid.GridGeometry2D;
 import org.geotools.coverage.grid.io.AbstractGridFormat;
 import org.geotools.coverage.grid.io.imageio.IIOMetadataDumper;
 import org.geotools.data.DataSourceException;
+import org.geotools.data.PrjFileReader;
 import org.geotools.factory.Hints;
 import org.geotools.geometry.GeneralEnvelope;
 import org.geotools.referencing.CRS;
 import org.geotools.referencing.crs.DefaultEngineeringCRS;
+import org.geotools.referencing.operation.matrix.XAffineTransform;
 import org.geotools.test.TestData;
 import org.junit.Test;
 import org.opengis.parameter.GeneralParameterValue;
@@ -52,13 +56,87 @@ import org.opengis.referencing.crs.CoordinateReferenceSystem;
  * 
  * @author Simone Giannecchini
  *
- *
  * @source $URL$
  */
 public class GeoTiffReaderTest extends Assert {
 	private final static Logger LOGGER = org.geotools.util.logging.Logging
 			.getLogger(GeoTiffReaderTest.class.toString());
 
+	/**
+	 * Testing proper CRS override with PRJ.
+	 * 
+	 * @throws IllegalArgumentException
+	 * @throws IOException
+	 * @throws FactoryException
+	 */
+	    @Test
+	    public void prjOverrideTesting1() throws IllegalArgumentException, IOException,
+	            FactoryException {
+
+	        //
+	        // PRJ override
+	        //
+	        final File noCrs = TestData.file(GeoTiffReaderTest.class, "override/sample.tif");
+	        final AbstractGridFormat format = new GeoTiffFormat();
+	        assertTrue(format.accepts(noCrs));
+	        GeoTiffReader reader = (GeoTiffReader) format.getReader(noCrs);
+	        CoordinateReferenceSystem crs=reader.getCrs();
+	        
+	        final File prj= TestData.file(GeoTiffReaderTest.class, "override/sample.prj");
+	        final CoordinateReferenceSystem crs_=new PrjFileReader(new FileInputStream(prj).getChannel()).getCoordinateReferenceSystem();
+	        assertTrue(CRS.equalsIgnoreMetadata(crs, crs_));
+	        GridCoverage2D coverage=reader.read(null);
+	        assertTrue(CRS.equalsIgnoreMetadata(coverage.getCoordinateReferenceSystem(), crs_));
+
+	        coverage.dispose(true);
+	    }
+	    
+		/**
+		 * Testing proper CRS override with PRJ.
+		 * 
+		 * @throws IllegalArgumentException
+		 * @throws IOException
+		 * @throws FactoryException
+		 */
+		    @Test
+		    public void prjOverrideTesting2() throws IllegalArgumentException, IOException,
+		            FactoryException {
+
+		        //
+		        // PRJ override
+		        //
+		        final File noCrs = TestData.file(GeoTiffReaderTest.class, "override/sample.tif");
+
+		        
+		        final File prj= TestData.file(GeoTiffReaderTest.class, "override/sample.prj");
+		        final CoordinateReferenceSystem crs_=new PrjFileReader(new FileInputStream(prj).getChannel()).getCoordinateReferenceSystem();
+
+		        
+
+		        // NO override
+		        GeoTiffReader.OVERRIDE_INNER_CRS=false;
+
+		        // getting a reader
+		        GeoTiffReader reader = new GeoTiffReader(noCrs);
+		        
+		        if(TestData.isInteractiveTest()){
+                            IIOMetadataDumper iIOMetadataDumper = new IIOMetadataDumper(
+                                            ((GeoTiffReader) reader).getMetadata()
+                                                            .getRootNode());
+                            System.out.println(iIOMetadataDumper.getMetadata());		        
+		        }
+		        // reading the coverage
+		        GridCoverage2D coverage1 = (GridCoverage2D) reader.read(null);
+
+		        // check coverage and crs
+		        assertNotNull(coverage1);
+		        assertNotNull(coverage1.getCoordinateReferenceSystem());
+		        assertNotSame(coverage1.getCoordinateReferenceSystem(),crs_);
+		        reader.dispose();
+
+		        coverage1.dispose(true);
+		        System.setProperty(GeoTiffReader.OVERRIDE_CRS_SWITCH, "True");
+		    }
     /**
      * Test for reading bad/strange geotiff files
      * 
@@ -67,6 +145,7 @@ public class GeoTiffReaderTest extends Assert {
      * @throws FactoryException
      */
     @Test
+//    @Ignore
     public void testReaderBadGeotiff() throws IllegalArgumentException, IOException,
             FactoryException {
 
@@ -152,14 +231,12 @@ public class GeoTiffReaderTest extends Assert {
      * @throws NoSuchAuthorityCodeException
      */
     @Test
-//    @Ignore
-    public void testReader() throws 
-                    IllegalArgumentException, 
-                    IOException,
-    		NoSuchAuthorityCodeException {
+    public void testReader() throws Exception {
     
-    	final File file = TestData.file(GeoTiffReaderTest.class, "");
-    	final File files[] = file.listFiles();
+    	final File baseDirectory = TestData.file(GeoTiffReaderTest.class, ".");
+    	final File writeDirectory =new File(baseDirectory,Long.toString(System.currentTimeMillis()));
+    	writeDirectory.mkdir();
+    	final File files[] = baseDirectory.listFiles();
     	final int numFiles = files.length;
     	final AbstractGridFormat format = new GeoTiffFormat();
     	for (int i = 0; i < numFiles; i++) {
@@ -180,16 +257,11 @@ public class GeoTiffReaderTest extends Assert {
     			buffer.append("ACCEPTED").append("\n");
     
     			// getting a reader
-    			GeoTiffReader reader = new GeoTiffReader(o, new Hints(
-    					Hints.FORCE_LONGITUDE_FIRST_AXIS_ORDER, Boolean.TRUE));
-    
-    			if(files[i].getAbsolutePath().endsWith("wind.tiff"))
-    			    System.out.println(files[i].getAbsolutePath());
+    			GeoTiffReader reader = new GeoTiffReader(o, new Hints(Hints.FORCE_LONGITUDE_FIRST_AXIS_ORDER, Boolean.TRUE));
     			if (reader != null) {
     
     				// reading the coverage
-    				GridCoverage2D coverage = (GridCoverage2D) reader
-    						.read(null);
+    			        final GridCoverage2D coverage = (GridCoverage2D) reader.read(null);
     
     				// Crs and envelope
     				if (TestData.isInteractiveTest()) {
@@ -208,11 +280,32 @@ public class GeoTiffReaderTest extends Assert {
     							iIOMetadataDumper.getMetadata()).append("\n");
     				}
     				// showing it
-    				if (TestData.isInteractiveTest())
-    					coverage.show();
-    				else
-    					PlanarImage.wrapRenderedImage(coverage.getRenderedImage()).getTiles();
-    
+    				if (TestData.isInteractiveTest()){
+    				    coverage.show();
+    				}
+    				else {
+    				    PlanarImage.wrapRenderedImage(coverage.getRenderedImage()).getTiles();
+    				}
+    				
+    				// write and read back
+    				final File destFile = File.createTempFile("test", ".tif",writeDirectory);				
+    				final GeoTiffWriter writer= new GeoTiffWriter(destFile);
+    				writer.write(coverage, null);
+    				writer.dispose();
+    				
+    				// read back
+    				assertTrue(format.accepts(destFile));
+    				reader = new GeoTiffReader(destFile, new Hints(Hints.FORCE_LONGITUDE_FIRST_AXIS_ORDER, Boolean.TRUE));
+    				final GridCoverage2D destCoverage = (GridCoverage2D) reader.read(null);
+    				reader.dispose();
+    				
+    				final double eps=XAffineTransform.getScaleX0((AffineTransform)coverage.getGridGeometry().getGridToCRS())*1E-2;
+    				assertTrue("CRS comparison failed:" +o.toString(),CRS.findMathTransform(coverage.getCoordinateReferenceSystem(), destCoverage.getCoordinateReferenceSystem(), true).isIdentity());
+    				assertTrue("CRS comparison failed:" +o.toString(),CRS.equalsIgnoreMetadata(coverage.getCoordinateReferenceSystem(), destCoverage.getCoordinateReferenceSystem()));
+    				assertTrue("GridRange comparison failed:" +o.toString(),coverage.getGridGeometry().getGridRange().equals(destCoverage.getGridGeometry().getGridRange()));
+    				assertTrue("Envelope comparison failed:" +o.toString(),((GeneralEnvelope)coverage.getGridGeometry().getEnvelope()).equals(destCoverage.getGridGeometry().getEnvelope(),eps,false));
+    				coverage.dispose(true);
+    				destCoverage.dispose(true);
     			}
     
     		} else
@@ -239,6 +332,7 @@ public class GeoTiffReaderTest extends Assert {
      * Test what we can do and what not with 
      */
     @Test
+//    @Ignore
     public void testTransparencySettings() throws Exception {
 
         
@@ -321,6 +415,7 @@ public class GeoTiffReaderTest extends Assert {
     }
     
     @Test
+//    @Ignore
     public void testExternalOverviews() throws Exception {
         final File file = TestData.file(GeoTiffReaderTest.class, "ovr.tif");
         assertNotNull(file);

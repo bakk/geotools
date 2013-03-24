@@ -16,15 +16,26 @@
  */
 package org.geotools.sld.v1_1;
 
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.MalformedURLException;
+import java.net.URI;
+
 import junit.framework.TestCase;
 
 import org.geotools.styling.FeatureTypeStyle;
+import org.geotools.styling.Graphic;
 import org.geotools.styling.NamedLayer;
 import org.geotools.styling.PolygonSymbolizer;
 import org.geotools.styling.Rule;
 import org.geotools.styling.Style;
 import org.geotools.styling.StyledLayerDescriptor;
 import org.geotools.xml.Parser;
+import org.opengis.style.ExternalGraphic;
+import org.xml.sax.EntityResolver;
+import org.xml.sax.InputSource;
+import org.xml.sax.SAXException;
 
 /**
  * 
@@ -89,8 +100,49 @@ public class SLDExampleTest extends TestCase {
         PolygonSymbolizer sym = (PolygonSymbolizer) r.symbolizers().get(0);
     }
     
+    public void testParseGraphicFill() throws Exception {
+        StyledLayerDescriptor sld = (StyledLayerDescriptor) parse("../graphicFill.xml");
+        NamedLayer layer = (NamedLayer) sld.getStyledLayers()[0];
+        PolygonSymbolizer ps = (PolygonSymbolizer) layer.getStyles()[0].featureTypeStyles().get(0).rules().get(0).symbolizers().get(0);
+        Graphic graphicFill = ps.getFill().getGraphicFill();
+        assertNotNull(graphicFill);
+        ExternalGraphic eg = (ExternalGraphic) graphicFill.graphicalSymbols().get(0);
+        assertEquals(new URI("http://maps.google.com/mapfiles/kml/pal2/icon4.png"), eg.getOnlineResource().getLinkage());
+        
+    }
+    
     Object parse(String filename) throws Exception {
         SLDConfiguration sld = new SLDConfiguration();
-        return new Parser(sld).parse(getClass().getResourceAsStream(filename));
+        InputStream location = getClass().getResourceAsStream(filename);
+        return new Parser(sld).parse(location);
+    }
+    
+    public void testParseSldWithExternalEntities() throws Exception {
+        // this SLD file references as external entity a file on the local filesystem
+        String file = "../example-textsymbolizer-externalentities.xml";
+        
+        Parser parser = new Parser(new SLDConfiguration());
+        
+        try {
+            InputStream location = getClass().getResourceAsStream(file);
+            parser.parse(location);
+            fail("parsing should fail with a FileNotFoundException because the parser try to access a file that doesn't exist");
+        } catch (FileNotFoundException e) {
+        }
+        
+        // set an entity resolver to prevent access to the local file system 
+        parser.setEntityResolver(new EntityResolver() {
+            @Override
+            public InputSource resolveEntity(String publicId, String systemId) throws SAXException, IOException {
+                return new InputSource();
+            }      
+        });
+        
+        try {
+            InputStream location = getClass().getResourceAsStream(file);
+            parser.parse(location);
+            fail("parsing should fail with a MalformedURLException because the EntityResolver blocked entity resolution");
+        } catch (MalformedURLException e) {
+        }        
     }
 }

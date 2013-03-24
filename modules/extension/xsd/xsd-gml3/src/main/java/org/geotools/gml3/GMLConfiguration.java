@@ -19,12 +19,14 @@ package org.geotools.gml3;
 import javax.xml.namespace.QName;
 
 import org.geotools.gml2.FeatureTypeCache;
+import org.geotools.gml2.SrsSyntax;
 import org.geotools.gml2.bindings.GMLCoordTypeBinding;
 import org.geotools.gml2.bindings.GMLCoordinatesTypeBinding;
 import org.geotools.gml3.bindings.AbstractFeatureCollectionTypeBinding;
 import org.geotools.gml3.bindings.AbstractFeatureTypeBinding;
 import org.geotools.gml3.bindings.AbstractGeometryTypeBinding;
 import org.geotools.gml3.bindings.AbstractRingPropertyTypeBinding;
+import org.geotools.gml3.bindings.ArcStringTypeBinding;
 import org.geotools.gml3.bindings.BoundingShapeTypeBinding;
 import org.geotools.gml3.bindings.ComplexSupportXSAnyTypeBinding;
 import org.geotools.gml3.bindings.CurveArrayPropertyTypeBinding;
@@ -125,7 +127,12 @@ public class GMLConfiguration extends Configuration {
      * extended support for arcs and surface flag
      */
     boolean extArcSurfaceSupport = false;
-    
+
+    /**
+     * Srs name style to encode srsName URI's with
+     */
+    protected SrsSyntax srsSyntax = SrsSyntax.OGC_URN_EXPERIMENTAL;
+
     public GMLConfiguration() {
         this(false);
     }
@@ -145,6 +152,23 @@ public class GMLConfiguration extends Configuration {
         //add parser properties
         getProperties().add(Parser.Properties.PARSE_UNKNOWN_ELEMENTS);
         getProperties().add(Parser.Properties.PARSE_UNKNOWN_ATTRIBUTES);
+    }
+
+    /**
+     * Sets the syntax to use for encoding srs uris.
+     * <p>
+     * If this method is not explicitly called {@link SrsSyntax#URN} is used as the default.
+     * </p>
+     */
+    public void setSrsSyntax(SrsSyntax srsSyntax) {
+        this.srsSyntax = srsSyntax;
+    }
+
+    /**
+     * Returns the syntax to use for encoding srs uris.
+     */
+    public SrsSyntax getSrsSyntax() {
+        return srsSyntax;
     }
 
     /**
@@ -256,6 +280,8 @@ public class GMLConfiguration extends Configuration {
         
         //extended bindings for arc/surface support
         if (isExtendedArcSurfaceSupport()) {
+            container.registerComponentImplementation(GML.ArcStringType,
+                    ArcStringTypeBinding.class);
             container.registerComponentImplementation(GML.ArcType,
                     ArcTypeBinding.class);
             container.registerComponentImplementation(GML.CircleType,
@@ -314,5 +340,7 @@ public class GMLConfiguration extends Configuration {
         if (isExtendedArcSurfaceSupport()) {
             container.registerComponentInstance(new ArcParameters());
         }
+
+        container.registerComponentInstance(srsSyntax);
     }
 }

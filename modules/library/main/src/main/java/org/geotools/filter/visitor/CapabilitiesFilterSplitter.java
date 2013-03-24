@@ -2,7 +2,7 @@
  *    GeoTools - The Open Source Java GIS Toolkit
  *    http://geotools.org
  * 
- *    (C) 2004-2008, Open Source Geospatial Foundation (OSGeo)
+ *    (C) 2004-2012, Open Source Geospatial Foundation (OSGeo)
  *    
  *    This library is free software; you can redistribute it and/or
  *    modify it under the terms of the GNU Lesser General Public
@@ -126,12 +126,21 @@ import org.opengis.filter.temporal.TOverlaps;
  * say with certainty exactly how the logic for that part of this works, but the test suite does
  * seem to test it and the tests do pass.
  * </p>
+ * <p>
+ * Since GeoTools 8.0, the {@link ClientTransactionAccessor} interface can also be used to instruct
+ * the splitter that a filter referencing a given {@link PropertyName} can't be encoded by the
+ * back-end, by returning {@link Filter#EXCLUDE} in
+ * {@link ClientTransactionAccessor#getUpdateFilter(String) getUpdateFilter(String)}. This is so
+ * because there may be the case where some attribute names are encodable to the back-end's query
+ * language, while others may not be, or may not be part of the stored data model. In such case,
+ * returning {@code Filter.EXCLUDE} makes the filter referencing the property name part of the
+ * post-processing filter instead of the pre-processing filter.
  * 
  * @author dzwiers
  * @author commented and ported from gt to ogc filters by saul.farber
  * @author ported to work upon {@code org.geotools.filter.Capabilities} by Gabriel Roldan
- *
- *
+ * 
+ * 
  * @source $URL$
  * @since 2.5.3
  */
@@ -635,8 +644,45 @@ public class CapabilitiesFilterSplitter implements FilterVisitor, ExpressionVisi
             original = filter;
 
         if (!fcs.supports(filter)) {
-            postStack.push(filter);
-            return;
+            // logical operators aren't supported
+            
+            // if the logical operator is AND            
+            if (filter instanceof And) {
+                // test if one of its children is supported
+                Iterator<Filter> it = ((And) filter).getChildren().iterator();
+                Filter supportedChild = null;
+                List<Filter> otherChildren = new ArrayList<Filter>();
+                while (it.hasNext()) {
+                    Filter child = (Filter) it.next();
+                    if (supportedChild == null && fcs.supports(child)) {
+                        supportedChild = child;
+                    } else {
+                        otherChildren.add(child);
+                    }
+                }
+                
+                if (supportedChild == null) {
+                    // no child supported
+                    postStack.push(filter);
+                    return;                                    
+                } else {
+                    // found at least one child supported
+                    
+                    // push the first supported child on preStack
+                    preStack.push(supportedChild);
+                    
+                    // push other children on postStack
+                    if (otherChildren.size() == 1) {
+                        postStack.push(otherChildren.get(0));
+                    } else {
+                        postStack.push(ff.and(otherChildren));
+                    }
+                    return;
+                }
+            } else {
+                postStack.push(filter);
+                return;                
+            }
         }
 
         int i = postStack.size();
@@ -781,13 +827,13 @@ public class CapabilitiesFilterSplitter implements FilterVisitor, ExpressionVisi
     public Object visit(Id filter, Object notUsed) {
         if (original == null)
             original = filter;
-
-        // figure out how to check that this is top level.
-        // otherwise this is fine
-        if (!postStack.isEmpty()) {
+        
+        if (!fcs.supports(filter)) {
             postStack.push(filter);
+        } else {
+            preStack.push(filter);            
         }
-        preStack.push(filter);
+
         return null;
     }
 
@@ -801,8 +847,13 @@ public class CapabilitiesFilterSplitter implements FilterVisitor, ExpressionVisi
             Filter updateFilter = (Filter) transactionAccessor.getUpdateFilter(expression
                     .getPropertyName());
             if (updateFilter != null) {
-                changedStack.add(updateFilter);
-                preStack.push(updateFilter);
+                if(updateFilter == Filter.EXCLUDE){
+                    // property name not encodable to backend
+                    postStack.push(expression);
+                }else{
+                    changedStack.add(updateFilter);
+                    preStack.push(updateFilter);
+                }
             } else
                 preStack.push(expression);
         } else {

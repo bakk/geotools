@@ -18,6 +18,7 @@ package org.geotools.data.postgis;
 
 import java.io.IOException;
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Savepoint;
@@ -66,6 +67,7 @@ import com.vividsolutions.jts.io.WKTReader;
  */
 public class PostGISDialect extends BasicSQLDialect {
 
+	//geometry type to class map
     final static Map<String, Class> TYPE_TO_CLASS_MAP = new HashMap<String, Class>() {
         {
             put("GEOMETRY", Geometry.class);
@@ -88,6 +90,7 @@ public class PostGISDialect extends BasicSQLDialect {
         }
     };
 
+    //geometry class to type map
     final static Map<Class, String> CLASS_TO_TYPE_MAP = new HashMap<Class, String>() {
         {
             put(Geometry.class, "GEOMETRY");
@@ -104,6 +107,12 @@ public class PostGISDialect extends BasicSQLDialect {
     
     static final Version V_1_5_0 = new Version("1.5.0");
 
+    static final Version V_2_0_0 = new Version("2.0.0");
+
+    static final Version PGSQL_V_9_0 = new Version("9.0");
+    
+    static final Version PGSQL_V_9_1 = new Version("9.1");
+
     public PostGISDialect(JDBCDataStore dataStore) {
         super(dataStore);
     }
@@ -114,7 +123,7 @@ public class PostGISDialect extends BasicSQLDialect {
     
     boolean functionEncodingEnabled = false;
     
-    Version version;
+    Version version, pgsqlVersion;
 
     public boolean isLooseBBOXEnabled() {
         return looseBBOXEnabled;
@@ -143,6 +152,11 @@ public class PostGISDialect extends BasicSQLDialect {
         this.functionEncodingEnabled = functionEncodingEnabled;
     }
 
+    @Override
+    public void initializeConnection(Connection cx) throws SQLException {
+        super.initializeConnection(cx);
+        getPostgreSQLVersion(cx);
+    }
 
     @Override
     public boolean includeTable(String schemaName, String tableName,
@@ -153,8 +167,15 @@ public class PostGISDialect extends BasicSQLDialect {
             return false;
         } else if (tableName.equals("geography_columns")) {
             return false;
+        } else if (tableName.equals("raster_columns")) {
+            return false;
+        } else if (tableName.equals("raster_overviews")) {
+            return false;
         }
 
+        if (schemaName != null && schemaName.equals("topology")) {
+            return false;
+        }
         // others?
         return true;
     }
@@ -253,7 +274,7 @@ public class PostGISDialect extends BasicSQLDialect {
                 if (att instanceof GeometryDescriptor) {
                     // use estimated extent (optimizer statistics)
                     StringBuffer sql = new StringBuffer();
-                    sql.append("select AsText(force_2d(Envelope(ST_Estimated_Extent('");
+                    sql.append("select ST_AsText(ST_force_2d(ST_Envelope(ST_Estimated_Extent('");
                     if(schema != null) {
                         sql.append(schema);
                         sql.append("', '");
@@ -467,8 +488,12 @@ public class PostGISDialect extends BasicSQLDialect {
             
             // fall back on inspection of the first geometry, assuming uniform srid (fair assumption
             // an unpredictable srid makes the table un-queriable)
-            if(srid == null) {
-                String sqlStatement = "SELECT SRID(\"" + columnName + "\") " +
+            //JD: In postgis 2.0 forward there is no way to leave a geometry srid unset since 
+            // geometry_columns is a view populated from system tables, so we check for 0 and take
+            // that to mean unset
+      
+            if(srid == null || (getVersion(cx).compareTo(V_2_0_0) >= 0 && srid == 0)) {
+                String sqlStatement = "SELECT ST_SRID(\"" + columnName + "\") " +
                                "FROM \"" + schemaName + "\".\"" + tableName + "\" " +
                                "WHERE " + columnName + " IS NOT NULL " +
                                "LIMIT 1";
@@ -573,6 +598,7 @@ public class PostGISDialect extends BasicSQLDialect {
 
         // jdbc metadata for geom columns reports DATA_TYPE=1111=Types.OTHER
         mappings.put(Geometry.class, Types.OTHER);
+        mappings.put(UUID.class, Types.OTHER);
     }
 
     @Override
@@ -595,6 +621,7 @@ public class PostGISDialect extends BasicSQLDialect {
         mappings.put("timetz", Time.class);
         mappings.put("timestamp", Timestamp.class);
         mappings.put("timestamptz", Timestamp.class);
+        mappings.put("uuid", UUID.class);
     }
     
     @Override
@@ -662,27 +689,42 @@ public class PostGISDialect extends BasicSQLDialect {
                     if (geomType == null)
                         geomType = "GEOMETRY";
 
-                    // register the geometry type, first remove and eventual
-                    // leftover, then write out the real one
-                    String sql = 
-                    "DELETE FROM GEOMETRY_COLUMNS"
-                            + " WHERE f_table_catalog=''" //
-                            + " AND f_table_schema = '" + schemaName + "'" //
-                            + " AND f_table_name = '" + tableName + "'" // 
-                            + " AND f_geometry_column = '" + gd.getLocalName() + "'";
-                    
-                    LOGGER.fine( sql );
-                    st.execute( sql );
-                    
-                    sql = "INSERT INTO GEOMETRY_COLUMNS VALUES (''," //
-                            + "'" + schemaName + "'," //
-                            + "'" + tableName + "'," //
-                            + "'" + gd.getLocalName() + "'," //
-                            + dimensions + "," //
-                            + srid + "," //
-                            + "'" + geomType + "')";
-                    LOGGER.fine( sql );
-                    st.execute( sql );
+                    String sql = null;
+                    if (getVersion(cx).compareTo(V_2_0_0) >= 0) {
+                        // postgis 2 and up we don't muck with geometry_columns, we just alter the
+                        // type directly to set the geometry type and srid
+                        //setup the geometry type
+                        sql = 
+                            "ALTER TABLE \"" + schemaName + "\".\"" + tableName + "\" " + 
+                             "ALTER COLUMN \"" + gd.getLocalName() + "\" " + 
+                             "TYPE geometry (" + geomType + ", " + srid + ");";
+                        
+                        LOGGER.fine( sql );
+                        st.execute( sql );
+                    }
+                    else {
+                        // register the geometry type, first remove and eventual
+                        // leftover, then write out the real one
+                        sql = 
+                        "DELETE FROM GEOMETRY_COLUMNS"
+                                + " WHERE f_table_catalog=''" //
+                                + " AND f_table_schema = '" + schemaName + "'" //
+                                + " AND f_table_name = '" + tableName + "'" // 
+                                + " AND f_geometry_column = '" + gd.getLocalName() + "'";
+                        
+                        LOGGER.fine( sql );
+                        st.execute( sql );
+                        
+                        sql = "INSERT INTO GEOMETRY_COLUMNS VALUES (''," //
+                                + "'" + schemaName + "'," //
+                                + "'" + tableName + "'," //
+                                + "'" + gd.getLocalName() + "'," //
+                                + dimensions + "," //
+                                + srid + "," //
+                                + "'" + geomType + "')";
+                        LOGGER.fine( sql );
+                        st.execute( sql );
+                    }
 
                     // add srid checks
                     if (srid > -1) {
@@ -692,7 +734,7 @@ public class PostGISDialect extends BasicSQLDialect {
                                 + "\"" + tableName + "\"" //
                                 + " ADD CONSTRAINT \"enforce_srid_" // 
                                 + gd.getLocalName() + "\""// 
-                                + " CHECK (SRID(" //
+                                + " CHECK (ST_SRID(" //
                                 + "\"" + gd.getLocalName() + "\"" //
                                 + ") = " + srid + ")";
                         LOGGER.fine( sql );
@@ -743,8 +785,10 @@ public class PostGISDialect extends BasicSQLDialect {
                     st.execute(sql);
                 }
             }
-            cx.commit();
-        } finally {
+            if (!cx.getAutoCommit()) {
+                cx.commit();
+            }
+         } finally {
             dataStore.closeSafe(st);
         }
     }
@@ -760,7 +804,7 @@ public class PostGISDialect extends BasicSQLDialect {
                 value = value.getFactory().createLineString(((LinearRing) value).getCoordinateSequence());
             }
             
-            sql.append("GeomFromText('" + value.toText() + "', " + srid + ")");
+            sql.append("ST_GeomFromText('" + value.toText() + "', " + srid + ")");
         }
     }
 
@@ -792,36 +836,54 @@ public class PostGISDialect extends BasicSQLDialect {
     @Override
     public void encodeValue(Object value, Class type, StringBuffer sql) {
         if(byte[].class.equals(type)) {
-            // escape the into bytea representation
-            StringBuffer sb = new StringBuffer();
             byte[] input = (byte[]) value;
-            for (int i = 0; i < input.length; i++) {
-                byte b = input[i];
-                if(b == 0) {
-                    sb.append("\\\\000");
-                } else if(b == 39) {
-                    sb.append("\\'");
-                } else if(b == 92) {
-                    sb.append("\\\\134'");
-                } else if(b < 31 || b >= 127) {
-                    sb.append("\\\\");
-                    String octal = Integer.toOctalString(b);
-                    if(octal.length() == 1) {
-                        sb.append("00");
-                    } else if(octal.length() == 2) {
-                        sb.append("0");
-                    }
-                    sb.append(octal);
-                } else {
-                    sb.append((char) b);
-                }
+            //check postgres version, if > 9 default encoding is hex
+            if (pgsqlVersion.compareTo(PGSQL_V_9_1) >= 0) {
+                encodeByteArrayAsHex(input, sql);
             }
-            super.encodeValue(sb.toString(), String.class, sql);
+            else {
+                encodeByteArrayAsEscape(input, sql);
+            }
+
         } else {
             super.encodeValue(value, type, sql);
         }
     }
-    
+
+    void encodeByteArrayAsHex(byte[] input, StringBuffer sql) {
+        StringBuffer sb = new StringBuffer("\\x");
+        for (int i = 0; i < input.length; i++) {
+            sb.append(String.format("%02x", input[i]));
+        }
+        super.encodeValue(sb.toString(), String.class, sql);
+    }
+
+    void encodeByteArrayAsEscape(byte[] input, StringBuffer sql) {
+        // escape the into bytea representation
+        StringBuffer sb = new StringBuffer();
+        for (int i = 0; i < input.length; i++) {
+            byte b = input[i];
+            if(b == 0) {
+                sb.append("\\\\000");
+            } else if(b == 39) {
+                sb.append("\\'");
+            } else if(b == 92) {
+                sb.append("\\\\134'");
+            } else if(b < 31 || b >= 127) {
+                sb.append("\\\\");
+                String octal = Integer.toOctalString(b);
+                if(octal.length() == 1) {
+                    sb.append("00");
+                } else if(octal.length() == 2) {
+                    sb.append("0");
+                }
+                sb.append(octal);
+            } else {
+                sb.append((char) b);
+            }
+        }
+        super.encodeValue(sb.toString(), String.class, sql);
+    }
     @Override
     public int getDefaultVarcharSize(){
         return -1;
@@ -849,7 +911,18 @@ public class PostGISDialect extends BasicSQLDialect {
         
         return version;
     }
-    
+
+    /**
+     * Returns the PostgreSQL version
+     */
+    public Version getPostgreSQLVersion(Connection conn) throws SQLException {
+        if (pgsqlVersion == null) {
+            DatabaseMetaData md = conn.getMetaData();
+            pgsqlVersion = new Version(
+                String.format("%d.%d", md.getDatabaseMajorVersion(), md.getDatabaseMinorVersion()));
+        }
+        return pgsqlVersion;
+    }
     /**
      * Returns true if the PostGIS version is >= 1.5.0
      */
