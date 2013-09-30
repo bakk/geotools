@@ -16,7 +16,7 @@
   <parent>
     <groupId>org.geotools</groupId>
     <artifactId>plugin</artifactId>
-    <version>10-SNAPSHOT</version>
+    <version>11-SNAPSHOT</version>
   </parent>
 
 
@@ -27,7 +27,6 @@
   <artifactId>gt-imagemosaic</artifactId>
   <packaging>jar</packaging>
   <name>imagemosaic datasource module</name>
-  
 
   <scm>
     <connection>
@@ -64,7 +63,7 @@
         <role>Documentation</role>
         <role>Module Maintainer</role>
       </roles>
-    </developer> 
+    </developer>
  </developers>
 
 
@@ -96,17 +95,25 @@
       <groupId>org.geotools.jdbc</groupId>
       <artifactId>gt-jdbc-h2</artifactId>
       <version>${project.version}</version>
-    </dependency>      
+      <scope>test</scope>
+    </dependency>
     <dependency>
       <groupId>org.geotools.jdbc</groupId>
       <artifactId>gt-jdbc-oracle</artifactId>
       <version>${project.version}</version>
-    </dependency>    
+      <scope>test</scope>
+    </dependency>
     <dependency>
       <groupId>org.geotools.jdbc</groupId>
       <artifactId>gt-jdbc-postgis</artifactId>
       <version>${project.version}</version>
       <scope>test</scope>
+    </dependency>
+    <dependency>
+      <artifactId>ojdbc14</artifactId>
+      <groupId>com.oracle</groupId>
+      <scope>provided</scope>
+      <!-- version specified in root pom -->
     </dependency>
     <dependency>
       <groupId>com.vividsolutions</groupId>
@@ -129,7 +136,7 @@
       <version>${project.version}</version>
     </dependency>
     <dependency>
-      <groupId>hsqldb</groupId>
+      <groupId>org.hsqldb</groupId>
       <artifactId>hsqldb</artifactId>
       <!-- The version number is specified in the parent POM. -->
     </dependency>
@@ -139,13 +146,13 @@
       <version>${project.version}</version>
     </dependency>
     <dependency>
-      <groupId>org.geotools.jdbc</groupId>
-      <artifactId>gt-jdbc-postgis</artifactId>
-      <version>${project.version}</version>
-    </dependency>   
-    <dependency>
       <groupId>org.geotools</groupId>
       <artifactId>gt-geotiff</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.geotools</groupId>
+      <artifactId>gt-transform</artifactId>
       <version>${project.version}</version>
     </dependency>
     <dependency>
@@ -156,13 +163,12 @@
       <groupId>org.geotools</groupId>
       <artifactId>gt-image</artifactId>
       <version>${project.version}</version>
-    </dependency>         
+    </dependency>
     <dependency>
       <groupId>org.geotools</groupId>
       <artifactId>gt-cql</artifactId>
       <version>${project.version}</version>
-      <scope>test</scope>
-    </dependency>        
+    </dependency>
     <dependency>
       <groupId>commons-beanutils</groupId>
       <artifactId>commons-beanutils</artifactId>
@@ -174,13 +180,11 @@
     <dependency>
       <groupId>org.jaitools</groupId>
       <artifactId>jt-vectorbinarize</artifactId>
-    </dependency> 
+    </dependency>
     <dependency>
       <groupId>net.sf.ehcache</groupId>
       <artifactId>ehcache</artifactId>
     </dependency>
-
-    <!-- Test dependencies -->
     <dependency>
       <groupId>org.geotools</groupId>
       <artifactId>gt-sample-data</artifactId>
@@ -200,22 +204,24 @@
     <dependency>
       <groupId>commons-io</groupId>
       <artifactId>commons-io</artifactId>
-    </dependency>    
+    </dependency>
   </dependencies>
-	<build>
-		<plugins>
-			<plugin>
-				<groupId>org.apache.maven.plugins</groupId>
-				<artifactId>maven-surefire-plugin</artifactId>
-				<configuration>
-					<forkMode>always</forkMode>
-					<argLine>-enableassertions</argLine>
-					<argLine>-enableassertions</argLine>
-					<excludes>
-						<exclude>*/.bak</exclude>
-					</excludes>					
-				</configuration>
-			</plugin>
-		</plugins>
-	</build>
+
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <forkMode>always</forkMode>
+          <argLine>-enableassertions</argLine>
+          <excludes>
+            <exclude>*/.bak</exclude>
+          </excludes>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+
 </project>

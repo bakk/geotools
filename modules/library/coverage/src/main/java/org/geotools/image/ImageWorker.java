@@ -114,12 +114,10 @@ import org.opengis.referencing.operation.MathTransform;
 import org.opengis.referencing.operation.MathTransform2D;
 import org.opengis.referencing.operation.MathTransformFactory;
 
-import com.sun.imageio.plugins.jpeg.JPEGImageWriterSpi;
 import com.sun.imageio.plugins.png.PNGImageWriter;
 import com.sun.media.imageioimpl.common.BogusColorSpace;
 import com.sun.media.imageioimpl.common.PackageUtil;
 import com.sun.media.imageioimpl.plugins.gif.GIFImageWriter;
-import com.sun.media.imageioimpl.plugins.jpeg.CLibJPEGImageWriterSpi;
 import com.sun.media.jai.util.ImageUtil;
 
 
@@ -142,18 +140,118 @@ import com.sun.media.jai.util.ImageUtil;
  * @author Martin Desruisseaux
  */
 public class ImageWorker {
+    /**
+     * The logger to use for this class.
+     */
+    private final static Logger LOGGER = Logging.getLogger("org.geotools.image");
     
     /** CODEC_LIB_AVAILABLE */
     private static final boolean CODEC_LIB_AVAILABLE = PackageUtil.isCodecLibAvailable();
 
     /** JDK_JPEG_IMAGE_WRITER_SPI */
-    private static final JPEGImageWriterSpi JDK_JPEG_IMAGE_WRITER_SPI = new JPEGImageWriterSpi();
+    private static final ImageWriterSpi JDK_JPEG_IMAGE_WRITER_SPI;
+    static{
+        ImageWriterSpi temp=null;
+        try {
+            
+            Class<?> clazz=Class.forName("com.sun.imageio.plugins.jpeg.JPEGImageWriterSpi");
+            if(clazz !=null){
+                temp=(ImageWriterSpi) clazz.newInstance();
+            }else{
+                temp=null;
+            }
+        } catch (Exception e) {
+            LOGGER.log(Level.FINER, e.getMessage(), e);
+            temp=null;
+        } 
+        // assign
+        JDK_JPEG_IMAGE_WRITER_SPI=temp;
+    }    
 
+    /** IMAGEIO_GIF_IMAGE_WRITER_SPI */
+    private static final ImageWriterSpi IMAGEIO_GIF_IMAGE_WRITER_SPI;
+    static{
+        ImageWriterSpi temp=null;
+        try {
+            
+            Class<?> clazz=Class.forName("com.sun.media.imageioimpl.plugins.gif.GIFImageWriterSpi");
+            if(clazz !=null){
+                temp=(ImageWriterSpi) clazz.newInstance();
+            }else{
+                temp=null;
+            }
+        } catch (Exception e) {
+            LOGGER.log(Level.FINER, e.getMessage(), e);
+            temp=null;
+        } 
+        
+        // assign
+        IMAGEIO_GIF_IMAGE_WRITER_SPI=temp;
+    }
+    
     /** IMAGEIO_JPEG_IMAGE_WRITER_SPI */
-    private static final CLibJPEGImageWriterSpi IMAGEIO_JPEG_IMAGE_WRITER_SPI = new CLibJPEGImageWriterSpi();
-
-    /** CS_PYCC */
-    private static final ColorSpace CS_PYCC = ColorSpace.getInstance(ColorSpace.CS_PYCC);
+    private static final ImageWriterSpi IMAGEIO_JPEG_IMAGE_WRITER_SPI;
+    static{
+        ImageWriterSpi temp=null;
+        try {
+            
+            Class<?> clazz=Class.forName("com.sun.media.imageioimpl.plugins.jpeg.CLibJPEGImageWriterSpi");
+            if(clazz !=null&&PackageUtil.isCodecLibAvailable()){
+                temp=(ImageWriterSpi) clazz.newInstance();
+            }else{
+                temp=null;
+            }
+        } catch (Exception e) {
+            LOGGER.log(Level.FINER, e.getMessage(), e);
+            temp=null;
+        } 
+        
+        // assign
+        IMAGEIO_JPEG_IMAGE_WRITER_SPI=temp;
+    }
+    
+    /** IMAGEIO_EXT_TIFF_IMAGE_WRITER_SPI */
+    private static final ImageWriterSpi IMAGEIO_EXT_TIFF_IMAGE_WRITER_SPI;
+    static{
+        ImageWriterSpi temp=null;
+        try {
+            
+            Class<?> clazz=Class.forName("it.geosolutions.imageioimpl.plugins.tiff.TIFFImageWriterSpi");
+            if(clazz !=null){
+                temp=(ImageWriterSpi) clazz.newInstance();
+            }else{
+                temp=null;
+            }
+        } catch (Exception e) {
+            LOGGER.log(Level.FINER, e.getMessage(), e);
+            temp=null;
+        } 
+        
+        // assign
+        IMAGEIO_EXT_TIFF_IMAGE_WRITER_SPI=temp;
+    }
+    
+    /** IMAGEIO_PNG_IMAGE_WRITER_SPI */
+    private static final ImageWriterSpi CLIB_PNG_IMAGE_WRITER_SPI;
+    static{
+        ImageWriterSpi temp=null;
+        try {
+            
+            Class<?> clazz=Class.forName("com.sun.media.imageioimpl.plugins.png.CLibPNGImageWriterSpi");
+            if(clazz !=null&&PackageUtil.isCodecLibAvailable()){
+                temp=(ImageWriterSpi) clazz.newInstance();
+            }else{
+                temp=null;
+            }
+            
+        } catch (Exception e) {
+            LOGGER.log(Level.FINER, e.getMessage(), e);
+            temp=null;
+        } 
+        
+        // assign
+        CLIB_PNG_IMAGE_WRITER_SPI=temp;
+    }
 
     /**
      * Raster space epsilon
@@ -192,10 +290,21 @@ public class ImageWorker {
         }
     }
 
-    /**
-     * The logger to use for this class.
-     */
-    private final static Logger LOGGER = Logging.getLogger("org.geotools.image");
+    /** CS_PYCC */
+    static final ColorSpace CS_PYCC;
+    static{
+        ColorSpace cs=null;
+        try{
+            cs = ColorSpace.getInstance(ColorSpace.CS_PYCC);
+        } catch (Throwable t) {
+            if(LOGGER.isLoggable(Level.FINE)){
+                LOGGER.log(Level.FINE,t.getLocalizedMessage(),t);
+            }
+        }
+        
+        // assign, either null or the real CS
+       CS_PYCC=cs;
+    }    
 
     /**
      * If {@link Boolean#FALSE FALSE}, image operators are not allowed to
@@ -807,6 +916,10 @@ public class ImageWorker {
      * @see #forceColorSpaceYCbCr()
      */
     public final boolean isColorSpaceYCbCr() {
+        // check the presence of the PYCC.pf file that contains the profile for the YCbCr color space
+        if(ImageWorker.CS_PYCC==null){
+            throw new IllegalStateException("Unable to create an YCbCr profile most like since we are unable to locate the YCbCr color profile. Check the Java installation.");
+        }        
         final ColorModel cm = image.getColorModel();
         if(cm==null){
             return false;
@@ -874,15 +987,15 @@ public class ImageWorker {
      */
     public final ImageWorker rescaleToBytes() {
 
-        if (isIndexed()) {
-            throw new UnsupportedOperationException(
-                    "Rescaling not yet implemented for IndexColorModel.");
-        }
         
         if (isBytes()) {
             // Already using bytes - nothing to do.
             return this;
         }
+
+        // this is to support 16 bits IndexColorModel
+        forceComponentColorModel(true, true);
+        
         final double[][] extrema = getExtremas();
         final int length = extrema[0].length;
         final double[] scale  = new double[length];
@@ -1178,7 +1291,7 @@ public class ImageWorker {
             forceComponentColorModel();
             cm= image.getColorModel();
         }
-        if(!(cm instanceof IndexColorModel))
+        if(!(cm instanceof IndexColorModel) || cm.getPixelSize()>8)
             rescaleToBytes();
         /*
          * Getting the alpha channel and separating from the others bands. If
@@ -2526,49 +2639,130 @@ public class ImageWorker {
             throws IOException
     {
         // Reformatting this image for PNG.
-        if (paletted && !(image.getColorModel() instanceof IndexColorModel)) {
+        final boolean hasPalette = image.getColorModel() instanceof IndexColorModel;
+        final boolean hasColorModel = hasPalette?false:image.getColorModel() instanceof ComponentColorModel;
+        if (paletted && !hasPalette) {
             // we have to reduce colors
-        	forceIndexColorModelForGIF(true);
-        } else if(!(image.getColorModel() instanceof ComponentColorModel) && !(image.getColorModel() instanceof IndexColorModel)) {
-            // png supports gray, rgb, rgba and paletted 8 bit, but not, for example, double and float values, or 16 bits palettes
-            forceComponentColorModel();
-        }
-        
-        // PNG does not support all kinds of index color models
-        if(image.getColorModel() instanceof IndexColorModel) {
-            IndexColorModel icm = (IndexColorModel) image.getColorModel();
-            // PNG supports up to 256 colors, beyond that we have to expand to RGB 
-            if(icm.getMapSize() > 256) {
-                forceComponentColorModel(true, true);
-                rescaleToBytes();
+            forceIndexColorModelForGIF(true);
+        } else {
+            if(!hasColorModel && !hasPalette) {
+                if(LOGGER.isLoggable(Level.FINER)){
+                    LOGGER.fine("Forcing input image to be compatible with PNG: No palette, no component color model");
+                }
+                // png supports gray, rgb, rgba and paletted 8 bit, but not, for example, double and float values, or 16 bits palettes
+                forceComponentColorModel();
             }
         }
         
-        if(LOGGER.isLoggable(Level.FINER))
-			LOGGER.finer("Encoded input image for png writer");
+        // PNG does not support all kinds of index color models
+        if(hasPalette) {
+            IndexColorModel icm = (IndexColorModel) image.getColorModel();
+            // PNG supports palettes with up to 256 colors, beyond that we have to expand to RGB 
+            if(icm.getMapSize() > 256) {
+                if(LOGGER.isLoggable(Level.FINER)){
+                    LOGGER.fine("Forcing input image to be compatible with PNG: Palette with > 256 color is not supported.");
+                }
+                rescaleToBytes();
+                if(paletted){
+                    forceIndexColorModelForGIF(true);
+                }
+            }
+        }        
+        
+        if(LOGGER.isLoggable(Level.FINE)){
+            LOGGER.fine("Encoded input image for png writer");
+        }
 
         // Getting a writer.
-        if(LOGGER.isLoggable(Level.FINER))
-			LOGGER.finer("Getting a writer");
-        final Iterator<ImageWriter> it = ImageIO.getImageWritersByFormatName("PNG");
-        if (!it.hasNext()) {
-            throw new IllegalStateException(Errors.format(ErrorKeys.NO_IMAGE_WRITER));
+        if(LOGGER.isLoggable(Level.FINE)){
+            LOGGER.fine("Getting a writer");
         }
-        ImageWriter writer = it.next();
+        ImageWriter writer=null;
+        ImageWriterSpi originatingProvider = null;
+        // ImageIO
+        if(nativeAcc){
+            if(CLIB_PNG_IMAGE_WRITER_SPI!=null){
+                // let me check if the native writer can encode this image
+                if(CLIB_PNG_IMAGE_WRITER_SPI.canEncodeImage(new ImageTypeSpecifier(image))){
+                    writer= CLIB_PNG_IMAGE_WRITER_SPI.createWriterInstance();
+                    originatingProvider=CLIB_PNG_IMAGE_WRITER_SPI;
+
+                } else {
+                    LOGGER.fine("The ImageIO PNG native encode cannot encode this image!");
+                    writer=null;
+                    originatingProvider=null;
+                }
+            }else{
+                LOGGER.fine("Unable to use Native ImageIO PNG writer.");
+            }
+        }
+
+        // move on with the writer quest
+        if(!nativeAcc||writer==null){
+
+            final Iterator<ImageWriter> it = ImageIO.getImageWriters(new ImageTypeSpecifier(image),"PNG");
+            if (!it.hasNext()) {
+                throw new IllegalStateException(Errors.format(ErrorKeys.NO_IMAGE_WRITER));
+            }
+            while(it.hasNext()){
+                writer = it.next();
+                originatingProvider = writer.getOriginatingProvider();
+                // check that this is not the native one
+                if (CLIB_PNG_IMAGE_WRITER_SPI!=null&&
+                        originatingProvider.getClass().equals(CLIB_PNG_IMAGE_WRITER_SPI.getClass())){
+                    if(it.hasNext()){
+                        writer = it.next();
+                        originatingProvider = writer.getOriginatingProvider();
+                    }else{
+                        LOGGER.fine("Unable to use PNG writer different than ImageIO CLib one");
+                    }
+                }
+                
+                // let me check if the native writer can encode this image (paranoiac checks this was already performed by the ImageIO search
+                if(originatingProvider.canEncodeImage(new ImageTypeSpecifier(image))){
+                    break; // leave loop
+                }   
+                
+                // clean
+                writer=null;
+                originatingProvider=null;
+            }
+        }
+        
+        // ok, last resort use the JDK one and reformat the image
+        if(writer==null){
+            List providers = com.sun.media.imageioimpl.common.ImageUtil.getJDKImageReaderWriterSPI(
+                    IIORegistry.getDefaultInstance(), 
+                    "PNG",
+                    false);
+            if(providers==null||providers.isEmpty()){
+                throw new IllegalStateException("Unable to find JDK Png encoder!");
+            }
+            originatingProvider=(ImageWriterSpi) providers.get(0);
+            writer=originatingProvider.createWriterInstance();
+            
+            // kk, last resort reformat the image
+            forceComponentColorModel(true, true);
+            rescaleToBytes();
+            if(!originatingProvider.canEncodeImage(image)){
+                throw new IllegalArgumentException("Unable to find a valid PNG Encoder! And believe me, we tried hard!");
+            }
+        }  
+        
+        LOGGER.fine("Using ImageIO Writer with SPI: "+originatingProvider.getClass().getCanonicalName());
 
         // Getting a stream.
-        if(LOGGER.isLoggable(Level.FINER))
-			LOGGER.finer("Setting write parameters for this writer");
+        LOGGER.fine("Setting write parameters for this writer");
+
         ImageWriteParam iwp = null;
         final ImageOutputStream memOutStream = ImageIOExt.createImageOutputStream(image, destination);
-        if(memOutStream==null)
-        	throw new IIOException(Errors.format(ErrorKeys.NULL_ARGUMENT_$1,"stream"));        
-        if (nativeAcc && writer.getClass().getName().equals(
-                "com.sun.media.imageioimpl.plugins.png.CLibPNGImageWriter"))
+        if(memOutStream==null){
+            throw new IIOException(Errors.format(ErrorKeys.NULL_ARGUMENT_$1,"stream"));        
+        }
+        if (CLIB_PNG_IMAGE_WRITER_SPI!=null&&originatingProvider.getClass().equals(CLIB_PNG_IMAGE_WRITER_SPI.getClass()))
         {
             // Compressing with native.
-        	if(LOGGER.isLoggable(Level.FINER))
-    			LOGGER.finer("Writer is native");
+            LOGGER.fine("Writer is native");
             iwp = writer.getDefaultWriteParam();
             // Define compression mode
             iwp.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
@@ -2580,38 +2774,31 @@ public class ImageWorker {
             iwp.setDestinationType(new ImageTypeSpecifier(image.getColorModel(), image.getSampleModel()));
         } else {
             // Compressing with pure Java.
-            // pure java from native
-            if (!nativeAcc && it.hasNext() && writer.getClass().getName().equals(
-                    "com.sun.media.imageioimpl.plugins.png.CLibPNGImageWriter"))
-            {
-                writer = it.next();
-            }
-            if(LOGGER.isLoggable(Level.FINER))
-    			LOGGER.finer("Writer is NOT native");
+            LOGGER.fine("Writer is NOT native");
+
             // Instantiating PNGImageWriteParam
             iwp = new PNGImageWriteParam();
             // Define compression mode
             iwp.setCompressionMode(ImageWriteParam.MODE_DEFAULT);
         }
-        if(LOGGER.isLoggable(Level.FINER))
-			LOGGER.finer("About to write png image");
+        LOGGER.fine("About to write png image");
         try{
-	        writer.setOutput(memOutStream);
-	        writer.write(null, new IIOImage(image, null, null), iwp);
+                writer.setOutput(memOutStream);
+                writer.write(null, new IIOImage(image, null, null), iwp);
         }
         finally{
-        	try{
-        		writer.dispose();
-        	}catch (Throwable e) {
-        		if(LOGGER.isLoggable(Level.FINEST))
-					LOGGER.log(Level.FINEST,e.getLocalizedMessage(),e);
-			}
-        	try{
-        		memOutStream.close();
-        	}catch (Throwable e) {
-        		if(LOGGER.isLoggable(Level.FINEST))
-					LOGGER.log(Level.FINEST,e.getLocalizedMessage(),e);
-			}        	
+                try{
+                        writer.dispose();
+                }catch (Throwable e) {
+                        if(LOGGER.isLoggable(Level.FINEST))
+                                        LOGGER.log(Level.FINEST,e.getLocalizedMessage(),e);
+                        }
+                try{
+                        memOutStream.close();
+                }catch (Throwable e) {
+                        if(LOGGER.isLoggable(Level.FINEST))
+                                        LOGGER.log(Level.FINEST,e.getLocalizedMessage(),e);
+                        }               
             
             
         }
@@ -2647,30 +2834,14 @@ public class ImageWorker {
             throws IOException
     {
         forceIndexColorModelForGIF(true);
-        final IIORegistry registry = IIORegistry.getDefaultInstance();
-        Iterator<ImageWriterSpi> it = registry.getServiceProviders(ImageWriterSpi.class, true);
-        ImageWriterSpi spi = null;
-        while (it.hasNext()) {
-            final ImageWriterSpi candidate = it.next();
-            if (containsFormatName(candidate.getFormatNames(), "gif")) {
-                if (spi == null) {
-                    spi = candidate;
-                } else {
-                    final String name = candidate.getClass().getName();
-                    if (name.equals("com.sun.media.imageioimpl.plugins.gif.GIFImageWriterSpi")) {
-                        spi = candidate;
-                        break;
-                    }
-                }
-            }
-        }
-        if (spi == null) {
+
+        if (IMAGEIO_GIF_IMAGE_WRITER_SPI == null) {
             throw new IIOException(Errors.format(ErrorKeys.NO_IMAGE_WRITER));
         }
         final ImageOutputStream stream = ImageIOExt.createImageOutputStream(image, destination);
         if(stream==null)
         	throw new IIOException(Errors.format(ErrorKeys.NULL_ARGUMENT_$1,"stream"));
-        final ImageWriter       writer = spi.createWriterInstance();
+        final ImageWriter       writer = IMAGEIO_GIF_IMAGE_WRITER_SPI.createWriterInstance();
         final ImageWriteParam   param  = writer.getDefaultWriteParam();
         param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
         param.setCompressionType(compression);
@@ -2747,7 +2918,7 @@ public class ImageWorker {
             LOGGER.fine("Getting a JPEG writer and configuring it.");
         }
         ImageWriter writer=null;
-        if (nativeAcc&&CODEC_LIB_AVAILABLE){
+        if (nativeAcc&&CODEC_LIB_AVAILABLE&&IMAGEIO_JPEG_IMAGE_WRITER_SPI!=null){
             try{
                 writer = IMAGEIO_JPEG_IMAGE_WRITER_SPI.createWriterInstance();
             }catch (Exception e) {
@@ -2759,17 +2930,11 @@ public class ImageWorker {
         } 
         // in case we want the JDK one or in case the native one is not at hand we use the JDK one
         if(writer==null){
+            if(JDK_JPEG_IMAGE_WRITER_SPI==null){
+                throw new IllegalStateException(Errors.format(ErrorKeys.ILLEGAL_CLASS_$2, "Unable to find JDK JPEG Writer"));
+            }
             writer = JDK_JPEG_IMAGE_WRITER_SPI.createWriterInstance();
-        }
-        
-        // only imageio IO does JPEG-LS compression
-        if((!CODEC_LIB_AVAILABLE||!(writer.getOriginatingProvider() instanceof CLibJPEGImageWriterSpi))
-        		&&
-        		compression.equals("JPEG-LS")
-        	){
-            throw new IOException(Errors.format(ErrorKeys.ILLEGAL_ARGUMENT_$2,"compression","JPEG-LS"));
-        }
-        
+        }    
 
         // Compression is available on both lib
         final ImageWriteParam iwp = writer.getDefaultWriteParam();
@@ -2868,16 +3033,29 @@ public class ImageWorker {
         // Getting a writer.
         if(LOGGER.isLoggable(Level.FINER))
             LOGGER.finer("Getting a TIFF writer and configuring it.");
-        final Iterator<ImageWriter> it = ImageIO.getImageWritersByFormatName("TIFF");
-        if (!it.hasNext()) {
-            throw new IllegalStateException(Errors.format(ErrorKeys.NO_IMAGE_WRITER));
+        ImageWriter writer =null;
+        if(IMAGEIO_EXT_TIFF_IMAGE_WRITER_SPI==null){
+            // our own is not there, strange... this should not happen
+            LOGGER.finer("Unable to find ImageIO-Ext Tiff Writer, looking for another one");
+            final Iterator<ImageWriter> it = ImageIO.getImageWritersByFormatName("TIFF");
+            if (!it.hasNext()) {
+                throw new IllegalStateException(Errors.format(ErrorKeys.NO_IMAGE_WRITER));
+            }
+            writer = it.next();            
+        } else {
+            writer= IMAGEIO_EXT_TIFF_IMAGE_WRITER_SPI.createWriterInstance();
         }
-        ImageWriter writer = it.next();
+
+        // checks
+        if(writer==null){
+            throw new IllegalStateException("Unable to find Tiff ImageWriter!");
+        }
         
         final ImageWriteParam iwp = writer.getDefaultWriteParam();
         final ImageOutputStream outStream = ImageIOExt.createImageOutputStream(image, destination);
-        if(outStream==null)
+        if(outStream==null){
             throw new IIOException(Errors.format(ErrorKeys.NULL_ARGUMENT_$1,"stream"));
+        }
         
         if(compression != null) {
             iwp.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
@@ -2891,8 +3069,9 @@ public class ImageWorker {
             iwp.setTiling(tileSizeX, tileSizeY, 0, 0);
         }
 
-        if(LOGGER.isLoggable(Level.FINER))
+        if(LOGGER.isLoggable(Level.FINER)){
             LOGGER.finer("Writing out...");
+        }
         
         try{
 

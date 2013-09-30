@@ -27,6 +27,7 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.util.logging.Logger;
 
+import javax.media.jai.ImageLayout;
 import javax.media.jai.PlanarImage;
 
 import junit.framework.Assert;
@@ -44,6 +45,8 @@ import org.geotools.referencing.CRS;
 import org.geotools.referencing.crs.DefaultEngineeringCRS;
 import org.geotools.referencing.operation.matrix.XAffineTransform;
 import org.geotools.test.TestData;
+import org.junit.After;
+import org.junit.Before;
 import org.junit.Test;
 import org.opengis.parameter.GeneralParameterValue;
 import org.opengis.parameter.ParameterValue;
@@ -62,6 +65,20 @@ public class GeoTiffReaderTest extends Assert {
 	private final static Logger LOGGER = org.geotools.util.logging.Logging
 			.getLogger(GeoTiffReaderTest.class.toString());
 
+	static boolean oldOverrideInnerCRS;
+	
+	@Before
+	public void saveGlobals() {
+	    oldOverrideInnerCRS = GeoTiffReader.OVERRIDE_INNER_CRS;
+	    GeoTiffReader.OVERRIDE_INNER_CRS = true;
+	}
+	
+	@After
+	public void cleanupGlobals() {
+        System.clearProperty(GeoTiffReader.OVERRIDE_CRS_SWITCH);
+        GeoTiffReader.OVERRIDE_INNER_CRS = oldOverrideInnerCRS; 
+	}
+	
 	/**
 	 * Testing proper CRS override with PRJ.
 	 * 
@@ -135,7 +152,6 @@ public class GeoTiffReaderTest extends Assert {
 		        reader.dispose();
 
 		        coverage1.dispose(true);
-		        System.setProperty(GeoTiffReader.OVERRIDE_CRS_SWITCH, "True");
 		    }
     /**
      * Test for reading bad/strange geotiff files
@@ -279,6 +295,22 @@ public class GeoTiffReaderTest extends Assert {
     					buffer.append("TIFF metadata: ").append(
     							iIOMetadataDumper.getMetadata()).append("\n");
     				}
+    				
+    				// layout checks
+    				final ImageLayout layout = reader.getImageLayout();
+    				assertNotNull(layout);
+    				assertNotNull(layout.getColorModel(null));
+    				assertNotNull(layout.getSampleModel(null));
+    				assertEquals(0,layout.getMinX(null));
+    				assertEquals(0,layout.getMinY(null));
+    				assertTrue(layout.getWidth(null) > 0);
+    				assertTrue(layout.getHeight(null) > 0);
+    				assertEquals(0,layout.getTileGridXOffset(null));
+    				assertEquals(0,layout.getTileGridYOffset(null));
+    				assertTrue(layout.getTileHeight(null) > 0);
+    				assertTrue(layout.getTileWidth(null) > 0);
+    				
+    				
     				// showing it
     				if (TestData.isInteractiveTest()){
     				    coverage.show();
@@ -420,12 +452,12 @@ public class GeoTiffReaderTest extends Assert {
         final File file = TestData.file(GeoTiffReaderTest.class, "ovr.tif");
         assertNotNull(file);
         assertEquals(true, file.exists());
-        GeoTiffReaderTester reader = new GeoTiffReaderTester(file);
+        GeoTiffReader reader = new GeoTiffReader(file);
         final int nOvrs = reader.getNumOverviews();
         LOGGER.info("Number of external overviews: " + nOvrs);
         assertEquals(4, nOvrs);
-        double[][] overviewResolutions = reader.getOverviewResolutions();
-        assertEquals(overviewResolutions.length, 4);
+        double[][] overviewResolutions = reader.getResolutionLevels();
+        assertEquals(overviewResolutions.length, 5);
         
         final ParameterValue<GridGeometry2D> gg =  AbstractGridFormat.READ_GRIDGEOMETRY2D.createValue();
         final GeneralEnvelope envelope = reader.getOriginalEnvelope();
@@ -442,31 +474,20 @@ public class GeoTiffReaderTest extends Assert {
         assertEquals(image.getHeight(), 32);
         
         final double delta = 0.00001;
-        assertEquals(overviewResolutions[0][0], 10, delta);
-        assertEquals(overviewResolutions[0][1], 10, delta);
-
-        assertEquals(overviewResolutions[1][0], 20, delta);
-        assertEquals(overviewResolutions[1][1], 20, delta);
-
-        assertEquals(overviewResolutions[2][0], 40, delta);
-        assertEquals(overviewResolutions[2][1], 40, delta);
+        assertEquals(overviewResolutions[0][0], 5, delta);
+        assertEquals(overviewResolutions[0][1], 5, delta);
         
-        assertEquals(overviewResolutions[3][0], 80, delta);
-        assertEquals(overviewResolutions[3][1], 80, delta);
+        assertEquals(overviewResolutions[1][0], 10, delta);
+        assertEquals(overviewResolutions[1][1], 10, delta);
+
+        assertEquals(overviewResolutions[2][0], 20, delta);
+        assertEquals(overviewResolutions[2][1], 20, delta);
+
+        assertEquals(overviewResolutions[3][0], 40, delta);
+        assertEquals(overviewResolutions[3][1], 40, delta);
         
-    }
-
-    class GeoTiffReaderTester extends GeoTiffReader {
-        public GeoTiffReaderTester(Object input) throws DataSourceException {
-            super(input);
-        }
-
-        int getNumOverviews() {
-            return numOverviews;
-        }
-
-        double[][] getOverviewResolutions() {
-            return overViewResolutions;
-        }
+        assertEquals(overviewResolutions[4][0], 80, delta);
+        assertEquals(overviewResolutions[4][1], 80, delta);
+        
     }
 }

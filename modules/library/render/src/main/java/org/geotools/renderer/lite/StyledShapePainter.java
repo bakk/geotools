@@ -322,10 +322,11 @@ public final class StyledShapePainter {
      *            The shape to draw.
      * @param legend
      *            The legend to apply.
-     * @param scale
-     *            The scale denominator for the current zoom level
+     * @param symbolScale
+     *            The scale of the symbol, if the legend graphic has to be rescaled               
      */
-    public void paint(final Graphics2D graphics, final LiteShape2 shape, final GraphicLegend legend, final double scale, boolean isLabelObstacle) {
+    public void paint(final Graphics2D graphics, final LiteShape2 shape, final GraphicLegend legend, 
+            final double symbolScale, boolean isLabelObstacle) {
         if (legend == null) {
             // TODO: what's going on? Should not be reached...
             throw new NullPointerException("ShapePainter has been asked to paint a null legend!!");
@@ -349,14 +350,26 @@ public final class StyledShapePainter {
                 while (!(iter.isDone())) {
                     iter.currentSegment(coords);
                     try {
-                            renderImage(graphics, coords[0], coords[1],
-                                    // Doesn't seem to work with SVGs
-                                    // Looking at the SLDStyleFactory, they get the icon from an
-                                    // ExternalGraphicFactory. 
-                                    ImageIO.read(graphic.getOnlineResource().getLinkage().toURL()), 
-                                    rotation, 
-                                    opacity,
-                                    isLabelObstacle);
+                        BufferedImage image = ImageIO.read(graphic.getOnlineResource().getLinkage().toURL());
+                        if (symbolScale != 1.0){
+                            int w = (int) (image.getWidth() / symbolScale);
+                            int h = (int) (image.getHeight() / symbolScale);
+                            int imageType = image.getType() == 0 ? BufferedImage.TYPE_4BYTE_ABGR : image.getType();
+                            BufferedImage rescaled = new BufferedImage(w, h, imageType);
+                            Graphics2D g = rescaled.createGraphics();
+                            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+                            g.drawImage(image, 0, 0, w, h, 0, 0, image.getWidth(), image.getHeight(), null);
+                            g.dispose();
+                            image = rescaled;
+                        }
+                        renderImage(graphics, coords[0], coords[1],
+                                // Doesn't seem to work with SVGs
+                                // Looking at the SLDStyleFactory, they get the icon from an
+                                // ExternalGraphicFactory. 
+                                image, 
+                                rotation, 
+                                opacity,
+                                isLabelObstacle);
                     } catch (IOException ex) {
                             Logger.getLogger(StyledShapePainter.class.getName()).log(Level.SEVERE, null, ex);
                     }
@@ -432,13 +445,17 @@ public final class StyledShapePainter {
 
         // I suppose the image has been already scaled and its square
         double imageSize;
+        double graphicRotation = 0;
         if(graphicStroke instanceof MarkStyle2D) {
             imageSize = ((MarkStyle2D) graphicStroke).getSize();
+            graphicRotation = ((MarkStyle2D) graphicStroke).getRotation();
         } else if(graphicStroke instanceof IconStyle2D) {
             imageSize = ((IconStyle2D) graphicStroke).getIcon().getIconWidth();
+            graphicRotation = ((IconStyle2D) graphicStroke).getRotation();
         } else {
             GraphicStyle2D gs = (GraphicStyle2D) graphicStroke;
             imageSize = gs.getImage().getWidth() - gs.getBorder();
+            graphicRotation = ((GraphicStyle2D) graphicStroke).getRotation();
         }
 
         double[] first = new double[2];
@@ -514,7 +531,7 @@ public final class StyledShapePainter {
                                 + Math.sqrt((dx * dx) + (dy * dy)));
                     }
     
-                    double rotation = -(theta - (Math.PI / 2d));
+                    double rotation = -(theta - (Math.PI / 2d)) + graphicRotation;
                     double x = previous[0] + (Math.sin(theta) * remainder);
                     double y = previous[1] + (Math.cos(theta) * remainder);
     

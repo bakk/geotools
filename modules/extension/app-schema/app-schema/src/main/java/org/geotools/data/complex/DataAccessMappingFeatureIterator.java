@@ -114,8 +114,8 @@ public class DataAccessMappingFeatureIterator extends AbstractMappingFeatureIter
     protected FeatureCollection<? extends FeatureType, ? extends Feature> sourceFeatures;
 
     protected List<Expression> foreignIds = null;
-    
-	protected AttributeDescriptor targetFeature;
+
+    protected AttributeDescriptor targetFeature;
 
     /**
      * True if joining is turned off and pre filter exists. There's a need to run extra query to get
@@ -131,8 +131,8 @@ public class DataAccessMappingFeatureIterator extends AbstractMappingFeatureIter
     private Filter listFilter;
 
     public DataAccessMappingFeatureIterator(AppSchemaDataAccess store, FeatureTypeMapping mapping,
-            Query query, boolean isFiltered) throws IOException {
-        this(store, mapping, query, null);
+            Query query, boolean isFiltered, boolean removeQueryLimitIfDenormalised) throws IOException {
+        super(store, mapping, query, null, removeQueryLimitIfDenormalised);
         this.isFiltered = isFiltered;
         if (isFiltered) {
             filteredFeatures = new ArrayList<String>();
@@ -165,7 +165,7 @@ public class DataAccessMappingFeatureIterator extends AbstractMappingFeatureIter
         boolean exists = !isNextSourceFeatureNull();
 
         if (!isHasNextCalled()) {
-            if (featureCounter < maxFeatures) {
+            if (featureCounter < requestMaxFeatures) {
                 if (!exists && getSourceFeatureIterator() != null
                         && getSourceFeatureIterator().hasNext()) {
                     this.curSrcFeature = getSourceFeatureIterator().next();
@@ -282,13 +282,17 @@ public class DataAccessMappingFeatureIterator extends AbstractMappingFeatureIter
      * aren't interpreted as one feature and merged.
      */
     public List<Object> getIdValues(Object source) {   
-        List<Object> ids = new ArrayList<Object>();
-        FilterAttributeExtractor extractor = new FilterAttributeExtractor();
-        mapping.getFeatureIdExpression().accept(extractor, null);
-        for (String att : extractor.getAttributeNameSet()) {
-            ids.add(peekValue(source, namespaceAwareFilterFactory.property( att)));
+        List<Object> ids = new ArrayList<Object>();        
+        if (Expression.NIL.equals(mapping.getFeatureIdExpression())) {
+            // GEOT-4554: if idExpression is not specified, should use PK
+            ids.add(peekValue(source, namespaceAwareFilterFactory.property("@id")));
+        } else {
+            FilterAttributeExtractor extractor = new FilterAttributeExtractor();
+            mapping.getFeatureIdExpression().accept(extractor, null);
+            for (String att : extractor.getAttributeNameSet()) {
+                ids.add(peekValue(source, namespaceAwareFilterFactory.property(att)));
+            }
         }
-        
         if (foreignIds != null) {
             ids.addAll(getForeignIdValues(source));
         }
@@ -319,8 +323,11 @@ public class DataAccessMappingFeatureIterator extends AbstractMappingFeatureIter
 
         }
         String version=(String)this.mapping.getTargetFeature().getType().getUserData().get("targetVersion");
-        //might be because top level feature has no geometry
-        if (targetCRS == null && version!=null) {
+        // might be because top level feature has no geometry
+        // GEOT-4550: exclude this part for WMS requests because the reprojection happens during rendering
+        // not at ReprojectingFilterVisitor.
+        // The original CRS should be preserved so the reprojection could happen at rendering.
+        if (targetCRS == null && version != null && !version.contains("wms")) {
             // figure out the crs the data is in
             CoordinateReferenceSystem crs=null;
             try{
@@ -362,10 +369,7 @@ public class DataAccessMappingFeatureIterator extends AbstractMappingFeatureIter
         
         //reproject target feature
         targetFeature = reprojectAttribute(mapping.getTargetFeature());
-
-        // we need to disable the max number of features retrieved so we can
-        // sort them manually just in case the data is denormalised
-        query.setMaxFeatures(Query.DEFAULT_MAX);
+        query.setMaxFeatures(dataMaxFeatures);
         sourceFeatures = mappedSource.getFeatures(query);
         if (reprojection != null) {
             xpathAttributeBuilder.setCRS(reprojection);
@@ -384,7 +388,7 @@ public class DataAccessMappingFeatureIterator extends AbstractMappingFeatureIter
         for (AttributeMapping attMapping : selectedMapping) {
 
             if (attMapping instanceof JoiningNestedAttributeMapping) {
-                ((JoiningNestedAttributeMapping) attMapping).open(this, query);
+                ((JoiningNestedAttributeMapping) attMapping).open(this, query, mapping);
 
             }
 
@@ -521,6 +525,14 @@ public class DataAccessMappingFeatureIterator extends AbstractMappingFeatureIter
             values = getValues(attMapping.isMultiValued(), sourceExpression, source);
         }
         boolean isHRefLink = isByReference(clientPropsMappings, isNestedFeature);
+        int newResolveDepth = resolveDepth;
+        //if resolving, no xlink:href for chained feature
+        boolean ignoreXlinkHref = false;
+        if (isHRefLink && newResolveDepth > 0) {
+        	isHRefLink = false;
+        	newResolveDepth--;
+        	ignoreXlinkHref = true;                
+        }
         if (isNestedFeature) {
         	if (values == null) {
                 // polymorphism use case, if the value doesn't match anything, don't encode
@@ -549,7 +561,7 @@ public class DataAccessMappingFeatureIterator extends AbstractMappingFeatureIter
                                 .getInputFeatures(this, val, getIdValues(source), source, reprojection, selectedProperties, includeMandatory));
                     } else {
                         nestedFeatures.addAll(((NestedAttributeMapping) attMapping).getFeatures(
-                                this, val, getIdValues(source), reprojection, source, selectedProperties, includeMandatory));
+                                this, val, getIdValues(source), reprojection, source, selectedProperties, includeMandatory, newResolveDepth, resolveTimeOut));
                     }
                 }
                 values = nestedFeatures;
@@ -561,7 +573,7 @@ public class DataAccessMappingFeatureIterator extends AbstractMappingFeatureIter
                 values = ((NestedAttributeMapping) attMapping).getInputFeatures(this, values, getIdValues(source), source, reprojection, selectedProperties, includeMandatory);
             } else {
                 values = ((NestedAttributeMapping) attMapping).getFeatures(this, values, getIdValues(source), reprojection,
-                        source, selectedProperties, includeMandatory);
+                        source, selectedProperties, includeMandatory, newResolveDepth, resolveTimeOut);
             }
             if (isHRefLink) {
                 // only need to set the href link value, not the nested feature properties
@@ -597,9 +609,7 @@ public class DataAccessMappingFeatureIterator extends AbstractMappingFeatureIter
                 } else {
                     valueList.add(singleVal);
                 }
-                instance = xpathAttributeBuilder.set(target, xpath, valueList, id,
-                        targetNodeType, false, sourceExpression);
-                setClientProperties(instance, source, clientPropsMappings);
+                instance = setAttributeContent(target, xpath, valueList, id, targetNodeType, false, sourceExpression, source, clientPropsMappings, ignoreXlinkHref);
             }
         } else {
             if (values instanceof Attribute) {
@@ -612,9 +622,7 @@ public class DataAccessMappingFeatureIterator extends AbstractMappingFeatureIter
                 }
                 values = ((Attribute) values).getValue();
             }
-            instance = xpathAttributeBuilder.set(target, xpath, values, id,
-                    targetNodeType, false, sourceExpression);
-            setClientProperties(instance, source, clientPropsMappings);
+            instance = setAttributeContent(target, xpath, values, id, targetNodeType, false, sourceExpression, source, clientPropsMappings, ignoreXlinkHref);
 
         } 
         if (instance != null && attMapping.encodeIfEmpty()) {
@@ -981,7 +989,7 @@ public class DataAccessMappingFeatureIterator extends AbstractMappingFeatureIter
                                     false, sourceExpr);
                         } else {
                             // simple attributes
-                            instance.setValue(valueString);
+                        	instance.setValue(valueString);
                         }
                     }
                 } else if (attMapping.isMultiValued()) {

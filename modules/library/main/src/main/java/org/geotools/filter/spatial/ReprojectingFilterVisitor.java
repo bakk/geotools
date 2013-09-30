@@ -1,6 +1,18 @@
-/* Copyright (c) 2001 - 2013 TOPP - www.openplans.org. All rights reserved.
- * This code is licensed under the GPL 2.0 license, available at the root
- * application directory.
+/*
+ *    GeoTools - The Open Source Java GIS Toolkit
+ *    http://geotools.org
+ * 
+ *    (C) 2001-2013, Open Source Geospatial Foundation (OSGeo)
+ *    
+ *    This library is free software; you can redistribute it and/or
+ *    modify it under the terms of the GNU Lesser General Public
+ *    License as published by the Free Software Foundation;
+ *    version 2.1 of the License.
+ *
+ *    This library is distributed in the hope that it will be useful,
+ *    but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ *    Lesser General Public License for more details.
  */
 package org.geotools.filter.spatial;
 
@@ -70,9 +82,9 @@ public class ReprojectingFilterVisitor extends DuplicatingFilterVisitor {
      * @return
      */
     private CoordinateReferenceSystem findPropertyCRS(PropertyName propertyName) {
-        AttributeDescriptor at = (AttributeDescriptor) propertyName.evaluate(featureType);
-        if (at instanceof GeometryDescriptor) {
-            GeometryDescriptor gat = (GeometryDescriptor) at;
+        Object o = propertyName.evaluate(featureType);
+        if (o instanceof GeometryDescriptor) {
+            GeometryDescriptor gat = (GeometryDescriptor) o;
             return gat.getCoordinateReferenceSystem();
         } else {
             return null;

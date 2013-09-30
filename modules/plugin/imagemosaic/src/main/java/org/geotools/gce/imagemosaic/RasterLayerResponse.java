@@ -2,7 +2,7 @@
  *    GeoTools - The Open Source Java GIS Toolkit
  *    http://geotools.org
  *
- *    (C) 2007-2008, Open Source Geospatial Foundation (OSGeo)
+ *    (C) 2007-2013, Open Source Geospatial Foundation (OSGeo)
  *
  *    This library is free software; you can redistribute it and/or
  *    modify it under the terms of the GNU Lesser General Public
@@ -69,6 +69,7 @@ import org.geotools.coverage.grid.GridCoverageFactory;
 import org.geotools.coverage.grid.GridEnvelope2D;
 import org.geotools.coverage.grid.GridGeometry2D;
 import org.geotools.coverage.grid.io.AbstractGridCoverage2DReader;
+import org.geotools.coverage.grid.io.GridCoverage2DReader;
 import org.geotools.data.DataSourceException;
 import org.geotools.data.DataUtilities;
 import org.geotools.data.Query;
@@ -103,7 +104,6 @@ import org.opengis.coverage.SampleDimension;
 import org.opengis.coverage.SampleDimensionType;
 import org.opengis.coverage.grid.GridCoverage;
 import org.opengis.feature.simple.SimpleFeature;
-import org.opengis.feature.simple.SimpleFeatureType;
 import org.opengis.filter.Filter;
 import org.opengis.filter.sort.SortBy;
 import org.opengis.filter.sort.SortOrder;
@@ -127,7 +127,7 @@ import com.vividsolutions.jts.geom.Geometry;
  */
 @SuppressWarnings("rawtypes")
 class RasterLayerResponse{
-    
+
     private static final class SimplifiedGridSampleDimension extends GridSampleDimension implements SampleDimension{
 
 		/**
@@ -348,11 +348,15 @@ class RasterLayerResponse{
             Utilities.ensureNonNull("granuleDescriptor", granuleDescriptor);
             
             if (granuleFilter.evaluate(granuleDescriptor.originator)) {
+                Object imageIndex = granuleDescriptor.originator.getAttribute("imageindex");
+                if(imageIndex != null && imageIndex instanceof Integer) {
+                    imageChoice = ((Integer) imageIndex).intValue();
+                }
                 final GranuleLoader loader = new GranuleLoader(baseReadParameters, imageChoice, mosaicBBox, finalWorldToGridCorner, granuleDescriptor, request, hints);
                 if (!dryRun) {
-                    if (multithreadingAllowed && rasterManager.parent.multiThreadedLoader != null) {
+                    if (multithreadingAllowed && rasterManager.parentReader.multiThreadedLoader != null) {
                         // MULTITHREADED EXECUTION submitting the task
-                        granulesFutures.add(rasterManager.parent.multiThreadedLoader.submit(loader));
+                        granulesFutures.add(rasterManager.parentReader.multiThreadedLoader.submit(loader));
                     } else {
                         // SINGLE THREADED Execution, we defer the execution to when we have done the loading
                         final FutureTask<GranuleLoadingResult> task = new FutureTask<GranuleLoadingResult>(loader);
@@ -393,7 +397,6 @@ class RasterLayerResponse{
            // execute them all
            final StringBuilder paths = new StringBuilder();
            final List<MosaicElement> returnValues= new ArrayList<RasterLayerResponse.MosaicElement>();
-           
            // collect sources for the current dimension and then process them
            for (Future<GranuleLoadingResult> future :granulesFutures) {
                      
@@ -743,9 +746,9 @@ class RasterLayerResponse{
                     overallROI = new ROIGeometry(((ROIGeometry) mosaicElement.roi).getAsGeometry());
                 } else {
                     if (mosaicElement.roi != null) {
-                        overallROI=overallROI.add(mosaicElement.roi);
+                        overallROI = overallROI.add(mosaicElement.roi);
                     }
-                }                
+                }
             }
 
             // execute mosaic
@@ -824,16 +827,47 @@ class RasterLayerResponse{
                 final Map<String, List> requestedAdditionalDomains = request.getRequestedAdditionalDomains();
                 if (!requestedAdditionalDomains.isEmpty()) {
                     Set<Entry<String, List>> entries = requestedAdditionalDomains.entrySet();
-                    if (entries.size() > 1) {
-                        throw new IllegalStateException("Unable to handle dimensions stacking for more than 1 dimension");
+
+                    // Preliminary check on additional domains specification
+                    // we can't do stack in case there are multiple values selections for more than one domain 
+                    checkMultipleSelection(entries);
+
+                    // Prepare filtering
+                    Entry<String, List> multipleSelectionEntry = null;
+                    final List<Filter> filters = new ArrayList<Filter>(entries.size());
+
+                    // Loop over the additional domains
+                    for (Entry<String, List> entry: entries) {
+                        if (entry.getValue().size() > 1) {
+                            // take note of the entry containing multiple values
+                            multipleSelectionEntry = entry;
+                        } else {
+                            // create single value domain filter
+                            String domainName = entry.getKey() + DomainDescriptor.DOMAIN_SUFFIX;
+                            filters.add(rasterManager.domainsManager.createFilter(domainName, Arrays.asList(entry.getValue())));
+                        }
                     }
-                    final Entry<String, List> element = entries.iterator().next();
-                    // build a filter for each dimension
-                    final String domainName = element.getKey() + DomainDescriptor.DOMAIN_SUFFIX;
-                    final List values = (List) element.getValue();
-                    for (Object o : values) {
-                        // create a filter for this value
-                        granuleCollectors.add(new GranuleCollector(rasterManager.domainsManager.createFilter(domainName, Arrays.asList(o)),dryRun));
+
+                    // Anding all filters together
+                    Filter andFilter = filters.size() > 0 ? FeatureUtilities.DEFAULT_FILTER_FACTORY.and(filters) : null;
+
+                    if (multipleSelectionEntry == null) {
+                        // Simpler case... no multiple selections. All filter have already been combined
+                        granuleCollectors.add(new GranuleCollector(andFilter, dryRun));
+                    } else {
+                        final String domainName = multipleSelectionEntry.getKey() + DomainDescriptor.DOMAIN_SUFFIX;
+
+                        // Need to loop over the multiple values of a custom domains
+                        final List values = (List) multipleSelectionEntry.getValue();
+                        for (Object o : values) {
+
+                            // create a filter for this value
+                            Filter valueFilter = rasterManager.domainsManager.createFilter(domainName, Arrays.asList(o));
+
+                            // combine that filter with the previously merged ones
+                            Filter combinedFilter = andFilter == null ? valueFilter : FeatureUtilities.DEFAULT_FILTER_FACTORY.and(andFilter, valueFilter);
+                            granuleCollectors.add(new GranuleCollector(combinedFilter, dryRun));
+                        }
                     }
                 }
             }
@@ -843,6 +877,24 @@ class RasterLayerResponse{
             // let's use a default marker
             if (granuleCollectors.isEmpty()) {
                 granuleCollectors.add(new GranuleCollector(Filter.INCLUDE, dryRun));
+            }
+        }
+
+        /**
+         * Check whether the specified custom domains contain multiple selection. That case isn't supported
+         * so we will throw an exception
+         * 
+         * @param entries
+         */
+        private void checkMultipleSelection(Set<Entry<String, List>> entries) {
+            int multipleDimensionsSelections = 0;
+            for (Entry<String, List> entry: entries) {
+                if (entry.getValue().size() > 1) {
+                    multipleDimensionsSelections++;
+                    if (multipleDimensionsSelections > 1) {
+                        throw new IllegalStateException("Unable to handle dimensions stacking for more than 1 dimension");
+                    }
+                }
             }
         }
 
@@ -910,9 +962,9 @@ class RasterLayerResponse{
             LOGGER.fine("Producing the final mosaic, step 1, loop through granule collectors");   
             final List<MosaicElement> mosaicInputs = new ArrayList<RasterLayerResponse.MosaicElement>();
             GranuleCollector first = null; // we take this apart to steal some val
-            final int size=granuleCollectors.size();
+            final int size = granuleCollectors.size();
             for (GranuleCollector collector : granuleCollectors) {
-                if(LOGGER.isLoggable(Level.FINE)){
+                if(LOGGER.isLoggable(Level.FINE)) {
                     LOGGER.fine("Using collector with filter:" + collector.granuleFilter.toString());
                 }
                 final MosaicElement preparedMosaic = new Mosaicker(collector.collectGranules(), MergeBehavior.FLAT).createMosaic();
@@ -922,7 +974,7 @@ class RasterLayerResponse{
                 }
             }
             LOGGER.fine("Producing the final mosaic, step 2, final mosaicking"); 
-            if(size==1){
+            if (size == 1) {
                 // we don't need to mosaick again
                 return mosaicInputs.get(0).source;
             }
@@ -1020,7 +1072,7 @@ class RasterLayerResponse{
 		setRoiProperty = request.isSetRoiProperty();
 		backgroundValues = request.getBackgroundValues();
 		interpolation = request.getInterpolation();
-		needsReprojection = request.isNeedsReprojection();
+		needsReprojection = request.spatialRequestHelper.isNeedsReprojection();
 		defaultArtifactsFilterThreshold = request.getDefaultArtifactsFilterThreshold();
 		artifactsFilterPTileThreshold = request.getArtifactsFilterPTileThreshold();
 	}
@@ -1099,7 +1151,7 @@ class RasterLayerResponse{
                         final AffineTransform sourceGridToWorld = new AffineTransform((AffineTransform) finalGridToWorldCorner);
 		        
 		        // target world to grid at the corner
-                        final AffineTransform targetGridToWorld = new AffineTransform(request.getRequestedGridToWorld());
+                        final AffineTransform targetGridToWorld = new AffineTransform(request.spatialRequestHelper.getRequestedGridToWorld());
                         targetGridToWorld.concatenate(CoverageUtilities.CENTER_TO_CORNER);
                         
                         // target world to grid at the corner
@@ -1177,7 +1229,8 @@ class RasterLayerResponse{
 
             // === collect granules
             final MosaicProducer visitor = new MosaicProducer();
-            rasterManager.getGranules(query, visitor);            
+            rasterManager.getGranuleDescriptors(query, visitor);   
+            
             // get those granules and create the final mosaic
             RenderedImage returnValue = visitor.produce();
 
@@ -1197,7 +1250,7 @@ class RasterLayerResponse{
             if (returnValue != null) {
                 if (LOGGER.isLoggable(Level.FINE)) {
                     LOGGER.fine("Loaded bbox " + mosaicBBox.toString() + " while crop bbox "
-                            + request.getCropBBox().toString());
+                            + request.spatialRequestHelper.getCropBBox().toString());
                 }
                 return returnValue;
             }
@@ -1212,10 +1265,10 @@ class RasterLayerResponse{
             final Utils.BBOXFilterExtractor bboxExtractor = new Utils.BBOXFilterExtractor();
             query.getFilter().accept(bboxExtractor, null);
             query.setFilter(FeatureUtilities.DEFAULT_FILTER_FACTORY.bbox(
-                    FeatureUtilities.DEFAULT_FILTER_FACTORY.property(rasterManager.granuleCatalog.getType().getGeometryDescriptor().getName()),
+                    FeatureUtilities.DEFAULT_FILTER_FACTORY.property(rasterManager.getGranuleCatalog().getType(rasterManager.getTypeName()).getGeometryDescriptor().getName()),
                     bboxExtractor.getBBox()));
             query.setMaxFeatures(1);
-            rasterManager.getGranules(query, dryRunVisitor);
+            rasterManager.getGranuleDescriptors(query, dryRunVisitor);
             if (dryRunVisitor.granulesNumber > 0) {
                 LOGGER.fine("Dry run got a target granule, returning null as the additional filters did filter all the granules out");
                 // It means the previous lack of granule was due to a filter excluding all the results. Then we return null
@@ -1267,7 +1320,7 @@ class RasterLayerResponse{
         final OverviewLevel selectedLevel = rasterManager.overviewsController.resolutionsLevels.get(imageChoice);
         final double resX = baseLevel.resolutionX;
         final double resY = baseLevel.resolutionY;
-        final double[] requestRes = request.getRequestedResolution();
+        final double[] requestRes = request.spatialRequestHelper.getRequestedResolution();
 
         g2w = new AffineTransform((AffineTransform) baseGridToWorld);
         g2w.concatenate(CoverageUtilities.CENTER_TO_CORNER);
@@ -1295,7 +1348,7 @@ class RasterLayerResponse{
      */
     private void initBBOX() {
         // ok we got something to return, let's load records from the index
-        final BoundingBox cropBBOX = request.getCropBBox();
+        final BoundingBox cropBBOX = request.spatialRequestHelper.getCropBBox();
         if (cropBBOX != null){
             mosaicBBox = ReferencedEnvelope.reference(cropBBOX);
         }else{
@@ -1310,7 +1363,7 @@ class RasterLayerResponse{
      * 
      * See {@link ReadParamsController}
      */
-    private void chooseOverview(){
+    private void chooseOverview() throws IOException, TransformException {
         //
         // prepare the params for executing a mosaic operation.
         //
@@ -1326,9 +1379,9 @@ class RasterLayerResponse{
         // level dimension and envelope. The grid to world transforms for
         // the other levels can be computed accordingly knowing the scale
         // factors.            
-        if (request.getRequestedBBox() != null && request.getRequestedRasterArea() != null && !request.isHeterogeneousGranules()){
+        if (request.spatialRequestHelper.getRequestedBBox() != null && request.spatialRequestHelper.getRequestedRasterArea() != null && !request.isHeterogeneousGranules()){
             imageChoice = ReadParamsController.setReadParams(
-                    request.getRequestedResolution(),
+                    request.spatialRequestHelper.getRequestedResolution(),
                     request.getOverviewPolicy(),
                     request.getDecimationPolicy(),
                     baseReadParameters,
@@ -1337,7 +1390,6 @@ class RasterLayerResponse{
         } else {
             imageChoice = 0;
         }
-        
         assert imageChoice>=0;
         if (LOGGER.isLoggable(Level.FINE)) {
             LOGGER.fine(new StringBuilder("Loading level ").append(imageChoice)
@@ -1357,17 +1409,18 @@ class RasterLayerResponse{
     private Query initQuery() throws Exception {
         final GeneralEnvelope levelRasterArea_ = CRS.transform(finalWorldToGridCorner, rasterManager.spatialDomainManager.coverageBBox);
         final GridEnvelope2D levelRasterArea = new GridEnvelope2D(new Envelope2D(levelRasterArea_), PixelInCell.CELL_CORNER);
-        XRectangle2D.intersect(levelRasterArea, rasterBounds, rasterBounds);                    
-        final SimpleFeatureType type = rasterManager.granuleCatalog.getType();
+        XRectangle2D.intersect(levelRasterArea, rasterBounds, rasterBounds);
+        final String typeName = rasterManager.getTypeName();
         Filter bbox = null;
-        if (type != null){
-            Query query = new Query(rasterManager.granuleCatalog.getType().getTypeName());
+        if (typeName != null){
+//            Query query = new Query(rasterManager.getGranuleCatalog().getType().getTypeName());
+            Query query = new Query(typeName);
             // max number of elements
             if(request.getMaximumNumberOfGranules()>0){
                 query.setMaxFeatures(request.getMaximumNumberOfGranules());
             }            
             bbox = FeatureUtilities.DEFAULT_FILTER_FACTORY.bbox(
-                    FeatureUtilities.DEFAULT_FILTER_FACTORY.property(rasterManager.granuleCatalog.getType().getGeometryDescriptor().getName()),
+                    FeatureUtilities.DEFAULT_FILTER_FACTORY.property(rasterManager.getGranuleCatalog().getType(typeName).getGeometryDescriptor().getName()),
                     mosaicBBox);
             query.setFilter( bbox);
             return query;
@@ -1394,7 +1447,7 @@ class RasterLayerResponse{
         // handle elevation indexing first since we then combine this with the max in case we are asking for current in time
         if (hasElevation) {            
             final Filter elevationF = rasterManager.elevationDomainManager.createFilter(
-                    ImageMosaicReader.ELEVATION_DOMAIN, elevations);
+                    GridCoverage2DReader.ELEVATION_DOMAIN, elevations);
             query.setFilter(FeatureUtilities.DEFAULT_FILTER_FACTORY.and(query.getFilter(), elevationF));
         }
 
@@ -1405,7 +1458,7 @@ class RasterLayerResponse{
 
         // fuse time query with the bbox query
         if (hasTime) {
-            final Filter timeFilter = this.rasterManager.timeDomainManager.createFilter(ImageMosaicReader.TIME_DOMAIN, times);
+            final Filter timeFilter = this.rasterManager.timeDomainManager.createFilter(GridCoverage2DReader.TIME_DOMAIN, times);
             query.setFilter(FeatureUtilities.DEFAULT_FILTER_FACTORY.and(query.getFilter(),timeFilter));
         }
 
@@ -1469,7 +1522,7 @@ class RasterLayerResponse{
 
                 // assign to query if sorting is supported!
                 final SortBy[] sb = clauses.toArray(new SortBy[] {});
-                if (rasterManager.granuleCatalog.getQueryCapabilities().supportsSorting(sb)) {
+                if (rasterManager.getGranuleCatalog().getQueryCapabilities(rasterManager.getTypeName()).supportsSorting(sb)) {
                     query.setSortBy(sb);
                 }
             } else {
@@ -1545,7 +1598,7 @@ class RasterLayerResponse{
                 	        }
                 	        
                 	        bandName = colorInterpretation.name();
-                                if(bandNames.contains(bandName)) {// make sure we create no duplicate band names
+                                if(colorInterpretation == ColorInterpretation.UNDEFINED || bandNames.contains(bandName)) {// make sure we create no duplicate band names
                                     bandName = "Band" + (i + 1);
                                 }
         	        } else { // no color model

@@ -20,6 +20,9 @@ import static org.geotools.styling.TextSymbolizer.*;
 
 import java.util.Map;
 
+import javax.measure.quantity.Length;
+import javax.measure.unit.Unit;
+
 import org.geotools.factory.CommonFactoryFinder;
 import org.geotools.styling.Displacement;
 import org.geotools.styling.ExternalGraphic;
@@ -175,7 +178,7 @@ public class RescaleStyleVisitor extends DuplicatingStyleVisitor {
 
         Expression opacityCopy = copy( gr.getOpacity() );
         Expression rotationCopy = copy( gr.getRotation() );
-        Expression sizeCopy = rescale( gr.getSize() );
+        Expression sizeCopy = rescaleGraphicSize(gr);
         
         Symbol[] symbols = gr.getSymbols();
         length=symbols.length;
@@ -197,6 +200,10 @@ public class RescaleStyleVisitor extends DuplicatingStyleVisitor {
         pages.push(copy);
     }
     
+    protected Expression rescaleGraphicSize(Graphic gr) {
+        return rescale(gr.getSize());
+    }
+
     @Override
     public void visit(TextSymbolizer text) {
         super.visit(text);
@@ -241,6 +248,7 @@ public class RescaleStyleVisitor extends DuplicatingStyleVisitor {
         rescaleOption(options, MIN_GROUP_DISTANCE_KEY, DEFAULT_MIN_GROUP_DISTANCE);
         rescaleOption(options, LABEL_REPEAT_KEY, DEFAULT_LABEL_REPEAT);
         rescaleOption(options, AUTO_WRAP_KEY, DEFAULT_AUTO_WRAP);
+        rescaleArrayOption(options, GRAPHIC_MARGIN_KEY, 0);
     }
     
     /**
@@ -278,5 +286,30 @@ public class RescaleStyleVisitor extends DuplicatingStyleVisitor {
         }
         
     };
+    
+    /**
+     * Rescales the specified vendor option
+     * @param options
+     * @param key
+     * @param defaultAutoWrap
+     * @param value
+     */
+    protected void rescaleArrayOption(Map<String, String> options, String key, int defaultValue) {
+        double scaleFactor = (double) scale.evaluate(null, Double.class);
+        if(options.get(key) != null) {
+            String strValue = options.get(key);
+            String[] splitted = strValue.split("\\s+");
+            StringBuilder sb = new StringBuilder();
+            for (String value : splitted) {
+                double rescaled = (int) Math.round(Double.parseDouble(value) * scaleFactor);
+                sb.append((int) rescaled).append(" ");
+            }
+            sb.setLength(sb.length() - 1);
+            options.put(key, sb.toString());
+        } else if(defaultValue != 0) {
+            options.put(key, String.valueOf((int) Math.round(defaultValue * scaleFactor)));
+        }
         
+    };
+    
 }

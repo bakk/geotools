@@ -275,14 +275,19 @@ public class NestedAttributeExpression extends AttributeExpressionImpl {
             return nestedMapping.getInputFeatures(val, fMapping);
         } else {
             // app-schema with a complex feature source
-            return nestedMapping.getFeatures(val, null, root);
+            return nestedMapping.getFeatures(val, null, root, 0, null);
         }
     }
 
     private Object getValue(Expression expression, Feature feature) {
-        Object value = expression.evaluate(feature);
-
-        return extractAttributeValue(value);
+        try {
+            Object value = expression.evaluate(feature);
+            return extractAttributeValue(value);
+        } catch (IllegalArgumentException e) {
+            // if the field doesn't exist in the feature
+            // i.e. if it's polymorphic
+            return null;
+        }
     }
 
     /**

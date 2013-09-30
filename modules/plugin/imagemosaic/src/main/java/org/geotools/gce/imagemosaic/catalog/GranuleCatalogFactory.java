@@ -2,7 +2,7 @@
  *    GeoTools - The Open Source Java GIS Toolkit
  *    http://geotools.org
  *
- *    (C) 2007-2008, Open Source Geospatial Foundation (OSGeo)
+ *    (C) 2007-2013, Open Source Geospatial Foundation (OSGeo)
  *
  *    This library is free software; you can redistribute it and/or
  *    modify it under the terms of the GNU Lesser General Public
@@ -32,7 +32,7 @@ import org.geotools.data.DataAccessFactory.Param;
 import org.geotools.data.DataStoreFactorySpi;
 import org.geotools.data.DataUtilities;
 import org.geotools.data.shapefile.ShapefileDataStoreFactory;
-import org.geotools.gce.imagemosaic.MosaicConfigurationBean;
+import org.geotools.factory.Hints;
 import org.geotools.gce.imagemosaic.PathType;
 import org.geotools.gce.imagemosaic.Utils;
 import org.geotools.util.Converters;
@@ -56,27 +56,33 @@ public abstract class GranuleCatalogFactory {
 	}
 	
 
-	public static GranuleCatalog createGranuleCatalog(final  Map<String, Serializable> params, final boolean caching, final boolean create, final DataStoreFactorySpi spi){
-		//TODO @todo this is a temporary hack before we have an even stupid SPI mechanism here
-	    final GranuleCatalog catalogue= new GTDataStoreGranuleCatalog(params,create,spi);
+	public static GranuleCatalog createGranuleCatalog(
+	        final  Map<String, Serializable> params, 
+	        final boolean caching, 
+	        final boolean create, 
+	        final DataStoreFactorySpi spi,
+	        final Hints hints){
 	    if (caching) {
-		    return new STRTreeGranuleCatalog(catalogue);
+		    return new STRTreeGranuleCatalog(params,spi,hints);
+	    } else {
+	        return new CachingDataStoreGranuleCatalog(new GTDataStoreGranuleCatalog(params,create,spi,hints));
 	    }
-	    return  catalogue;
 	}
 
 	public static GranuleCatalog createGranuleCatalog(
 			final URL sourceURL,
-			final MosaicConfigurationBean configuration){
+			final CatalogConfigurationBean catalogConfigurationBean,
+			final Map<String, Serializable> overrideParams,
+	                final Hints hints){
 		final File sourceFile=DataUtilities.urlToFile(sourceURL);
 		final String extension= FilenameUtils.getExtension(sourceFile.getAbsolutePath());	
 		
 		// STANDARD PARAMS
 		final Map<String, Serializable> params = new HashMap<String, Serializable>();
-		params.put(Utils.Prop.PATH_TYPE,configuration.isAbsolutePath()?PathType.ABSOLUTE:PathType.RELATIVE);
-		params.put(Utils.Prop.LOCATION_ATTRIBUTE,configuration.getLocationAttribute());
-		params.put(Utils.Prop.SUGGESTED_SPI,configuration.getSuggestedSPI());
-		params.put(Utils.Prop.HETEROGENEOUS, configuration.isHeterogeneous());
+		params.put(Utils.Prop.PATH_TYPE, catalogConfigurationBean.isAbsolutePath()?PathType.ABSOLUTE:PathType.RELATIVE);
+		params.put(Utils.Prop.LOCATION_ATTRIBUTE, catalogConfigurationBean.getLocationAttribute());
+		params.put(Utils.Prop.SUGGESTED_SPI, catalogConfigurationBean.getSuggestedSPI());
+		params.put(Utils.Prop.HETEROGENEOUS, catalogConfigurationBean.isHeterogeneous());
 		if(sourceURL!=null){
 			File parentDirectory=DataUtilities.urlToFile(sourceURL);
 			if(parentDirectory.isFile())
@@ -86,9 +92,9 @@ public abstract class GranuleCatalogFactory {
 		else
 			params.put(Utils.Prop.PARENT_LOCATION, null);
 		// add typename
-		String typeName=configuration.getTypeName();
+		String typeName = catalogConfigurationBean.getTypeName();
 		if(typeName!=null){
-			params.put(Utils.Prop.TYPENAME, configuration.getTypeName());
+			params.put(Utils.Prop.TYPENAME, catalogConfigurationBean.getTypeName());
 		}		
 		// SPI
 		DataStoreFactorySpi spi=null;
@@ -135,8 +141,15 @@ public abstract class GranuleCatalogFactory {
 				return null;
 			}
 		}		
-		// istantiate
-		return configuration.isCaching()?new STRTreeGranuleCatalog(params,spi):new GTDataStoreGranuleCatalog(params,false,spi);
+		// Instantiate
+		if (overrideParams != null && !overrideParams.isEmpty()) {
+		    params.putAll(overrideParams);
+		}
+		final GranuleCatalog catalog = catalogConfigurationBean.isCaching()?
+		        new STRTreeGranuleCatalog(params,spi,hints):
+		            new CachingDataStoreGranuleCatalog(new GTDataStoreGranuleCatalog(params,false,spi,hints));
+
+		return catalog;
 	}
 
 }

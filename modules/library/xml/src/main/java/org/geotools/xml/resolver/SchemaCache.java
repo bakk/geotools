@@ -27,10 +27,8 @@ import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
-import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
-import java.util.Set;
 import java.util.logging.Logger;
 
 import org.geotools.data.DataUtilities;
@@ -103,17 +101,27 @@ public class SchemaCache {
      * True if resources not found in the cache are downloaded from the net.
      */
     private final boolean download;
-    
-    /**
-     * Set of locations currently in download. Allows resolving a location
-     * to a partially downloaded file.
-     */
-    final static Set<String> locationsInDownload = new HashSet<String>();
-    
+        
     /**
      * True if query string components should be part of the discriminator for
      */
     private final boolean keepQuery;
+    
+    /**
+     * Default download timeout. Change it with -Dschema.cache.download.timeout=<milliseconds>
+     */
+    private static int downloadTimeout = 60000;
+    
+    
+    static {
+        if(System.getProperty("schema.cache.download.timeout") != null) {
+            try {
+                downloadTimeout = Integer.parseInt(System.getProperty("schema.cache.download.timeout"));
+            } catch(NumberFormatException e) {
+                LOGGER.warning("schema.cache.download.timeout has a wrong format: should be a number");
+            }
+        }
+    }
 
     /**
      * A cache of XML schemas (or other file types) rooted in the given directory, with optional downloading.
@@ -191,6 +199,7 @@ public class SchemaCache {
      * @param bytes
      */
     static void store(File file, byte[] bytes) {
+    
         OutputStream output = null;
         try {
             if (file.getParentFile() != null && !file.getParentFile().exists()) {
@@ -253,8 +262,8 @@ public class SchemaCache {
                 return null;
             }
             HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-            connection.setConnectTimeout(10000);
-            connection.setReadTimeout(10000);
+            connection.setConnectTimeout(downloadTimeout);
+            connection.setReadTimeout(downloadTimeout);
             connection.setUseCaches(false);
             connection.connect();
             if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) {
@@ -306,7 +315,8 @@ public class SchemaCache {
             }
             return bytes;
         } catch (Exception e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException("Error downloading location: "
+                    + location.toString(), e);
         }
     }
 
@@ -323,90 +333,33 @@ public class SchemaCache {
         }
         String relativePath = path.substring(1);
         File file;
+        
         try {
             file = new File(getDirectory(), relativePath).getCanonicalFile();
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
-        // if the location is already in download we start a temporary download 
-        // for the current thread and we won't cache it at the end
-        boolean isTemp = false;
-        synchronized (locationsInDownload) {
-            if (!locationsInDownload.contains(location)) {
-                if (file.exists()) {
-                    return DataUtilities.fileToURL(file).toExternalForm();
-                }
-            } else {
-                // the location is already in download, we can't wait for it to
-                // complete, so we download another (temporary) copy and return that
-                isTemp = true;
-                try {
-                    // new file in a temporary folder
-                    file = new File(getTempDirectory(), relativePath)
-                            .getCanonicalFile();
-                } catch (IOException e) {
-                    LOGGER.severe("Can't create temporary file: "
-                            + file.getAbsolutePath());
-                    throw new RuntimeException(e);
-                }
+        
+        synchronized(SchemaCache.class) {
+            if(file.exists()) {
+                return DataUtilities.fileToURL(file).toExternalForm();
             }
         }
+        
         if (isDownloadAllowed()) {
-            // add location to downloading list
-            startDownload(location, file, isTemp);
-    
             byte[] bytes = download(location);
             if (bytes == null) {
-                endDownload(location, isTemp);
                 return null;
             }
-            store(file, bytes);
-            LOGGER.info("Cached XML schema: " + location);
-            endDownload(location, isTemp);
-            if (isTemp) {
-                file.deleteOnExit();
-            }
-    
-            return DataUtilities.fileToURL(file).toExternalForm();
-        } else {
-            return null;
-        }
-    }
-
-    /**
-     * @param location
-     * @param isTemp
-     */
-    private void endDownload(String location, boolean isTemp) {
-        if(!isTemp) {
-            synchronized(locationsInDownload) {
-                locationsInDownload.remove(location);                        
-            }
-        }
-    }
-
-    /**
-     * Adds the given file / location to the list of files in download.
-     * 
-     * @param location
-     * @param file
-     */
-    private void startDownload(String location, File file, boolean isTemp) {
-        if(!isTemp) {
-            synchronized(locationsInDownload) {
-                locationsInDownload.add(location);
-                try {
-                    // we create an empty placeholder to be sure the file exists
-                    // for other threads to check
-                    file.getParentFile().mkdirs();
-                    file.createNewFile();
-                } catch (IOException e) {
-                    locationsInDownload.remove(location);
-                    LOGGER.severe("Can't create cache file: "+file.getAbsolutePath());
-                    throw new RuntimeException(e);
+            synchronized(SchemaCache.class) {
+                if(!file.exists()) {
+                    store(file, bytes);
+                    LOGGER.info("Cached XML schema: " + location);
                 }
+                return DataUtilities.fileToURL(file).toExternalForm();
             }
-        }
+        } 
+        return null;
     }
 
     /**

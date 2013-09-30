@@ -16,7 +16,7 @@
   <parent>
     <groupId>org.geotools</groupId>
     <artifactId>modules</artifactId>
-    <version>10-SNAPSHOT</version>
+    <version>11-SNAPSHOT</version>
   </parent>
 
 
@@ -128,15 +128,6 @@
        </modules>
      </profile>
      <profile>
-       <id>shapefile-renderer</id>
-       <activation>
-         <property><name>all</name></property>
-       </activation>
-       <modules>
-         <module>shapefile-renderer</module>
-       </modules>
-     </profile>
-     <profile>
        <id>swt</id>
        <modules>
          <module>swt</module>
@@ -161,13 +152,11 @@
        </modules>
      </profile>
      <profile>
-       <id>transform</id>
        <activation>
          <property><name>all</name></property>
        </activation>
        <modules>
-         <module>transform</module>
-
+         <module>coverage-experiment</module>
        </modules>
      </profile>
      <profile>
@@ -186,7 +175,7 @@
          <module>feature-aggregate</module>
          <module>mongodb</module>
          <module>property-ng</module>
-         <module>shapefile-ng</module>
+         <module>shapefile-old</module>
        </modules>
      </profile>
   </profiles>
@@ -198,6 +187,7 @@
     <module>process</module>
     <module>wfs</module>
     <module>geojson</module>
+    <module>geopkg</module>
   </modules>
 
 </project>
